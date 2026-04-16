@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { exchangeCode, saveTokens } from "@/lib/spotify-auth";
+import { exchangeCode } from "@/lib/spotify-auth";
 import { useAuth } from "@/app/providers";
 
 export default function CallbackPage() {
@@ -26,8 +26,7 @@ export default function CallbackPage() {
     }
 
     exchangeCode(code)
-      .then((data) => {
-        saveTokens(data.access_token, data.refresh_token, data.expires_in);
+      .then(() => {
         refreshAuth().then(() => router.replace("/"));
       })
       .catch((err) => {

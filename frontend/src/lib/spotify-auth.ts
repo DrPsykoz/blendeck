@@ -1,6 +1,7 @@
 const CLIENT_ID = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID!;
 const REDIRECT_URI =
 	process.env.NEXT_PUBLIC_REDIRECT_URI || "http://localhost:3000/callback";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const SCOPES = [
 	"playlist-read-private",
@@ -56,23 +57,18 @@ export async function redirectToSpotifyAuth(): Promise<void> {
 	window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
 }
 
-export async function exchangeCode(code: string): Promise<{
-	access_token: string;
-	refresh_token: string;
-	expires_in: number;
-}> {
+export async function exchangeCode(code: string): Promise<void> {
 	const codeVerifier = sessionStorage.getItem("code_verifier");
 	if (!codeVerifier) throw new Error("Missing code verifier");
 
-	const response = await fetch("https://accounts.spotify.com/api/token", {
+	const response = await fetch(`${API_URL}/api/auth/token`, {
 		method: "POST",
-		headers: { "Content-Type": "application/x-www-form-urlencoded" },
-		body: new URLSearchParams({
-			client_id: CLIENT_ID,
-			grant_type: "authorization_code",
+		headers: { "Content-Type": "application/json" },
+		credentials: "include",
+		body: JSON.stringify({
 			code,
-			redirect_uri: REDIRECT_URI,
 			code_verifier: codeVerifier,
+			redirect_uri: REDIRECT_URI,
 		}),
 	});
 
@@ -82,82 +78,86 @@ export async function exchangeCode(code: string): Promise<{
 
 	const data = await response.json();
 	sessionStorage.removeItem("code_verifier");
-	return data;
+
+	// Store access token in memory (refresh token is in httpOnly cookie)
+	_accessToken = data.access_token;
+	_tokenExpiry = Date.now() + data.expires_in * 1000;
 }
 
-export async function refreshAccessToken(refreshToken: string): Promise<{
+async function refreshAccessToken(): Promise<{
 	access_token: string;
-	refresh_token: string;
 	expires_in: number;
-}> {
-	const response = await fetch("https://accounts.spotify.com/api/token", {
-		method: "POST",
-		headers: { "Content-Type": "application/x-www-form-urlencoded" },
-		body: new URLSearchParams({
-			client_id: CLIENT_ID,
-			grant_type: "refresh_token",
-			refresh_token: refreshToken,
-		}),
-	});
-
-	if (!response.ok) throw new Error("Token refresh failed");
-	return response.json();
+} | null> {
+	try {
+		const response = await fetch(`${API_URL}/api/auth/refresh`, {
+			method: "POST",
+			credentials: "include",
+		});
+		if (!response.ok) return null;
+		return response.json();
+	} catch {
+		return null;
+	}
 }
 
-// Token storage utilities
-const TOKEN_KEY = "spotify_access_token";
-const REFRESH_KEY = "spotify_refresh_token";
-const EXPIRY_KEY = "spotify_token_expiry";
+// ── In-memory token storage (not persisted, not accessible via XSS on localStorage) ──
+let _accessToken: string | null = null;
+let _tokenExpiry: number = 0;
+
+// One-time migration: clear old localStorage tokens from previous versions
+if (typeof localStorage !== "undefined") {
+	localStorage.removeItem("spotify_access_token");
+	localStorage.removeItem("spotify_refresh_token");
+	localStorage.removeItem("spotify_token_expiry");
+}
 
 export function saveTokens(
 	accessToken: string,
-	refreshToken: string,
+	_refreshToken: string,
 	expiresIn: number,
 ): void {
-	localStorage.setItem(TOKEN_KEY, accessToken);
-	localStorage.setItem(REFRESH_KEY, refreshToken);
-	localStorage.setItem(EXPIRY_KEY, String(Date.now() + expiresIn * 1000));
+	_accessToken = accessToken;
+	_tokenExpiry = Date.now() + expiresIn * 1000;
 }
 
 export function getAccessToken(): string | null {
-	return localStorage.getItem(TOKEN_KEY);
+	return _accessToken;
 }
 
 export function getRefreshToken(): string | null {
-	return localStorage.getItem(REFRESH_KEY);
+	// Refresh token is now in httpOnly cookie, not accessible from JS
+	return null;
 }
 
 export function isTokenExpired(): boolean {
-	const expiry = localStorage.getItem(EXPIRY_KEY);
-	if (!expiry) return true;
-	return Date.now() > Number(expiry) - 60000; // 1 min buffer
+	if (!_tokenExpiry) return true;
+	return Date.now() > _tokenExpiry - 60000; // 1 min buffer
 }
 
 export function clearTokens(): void {
-	localStorage.removeItem(TOKEN_KEY);
-	localStorage.removeItem(REFRESH_KEY);
-	localStorage.removeItem(EXPIRY_KEY);
+	_accessToken = null;
+	_tokenExpiry = 0;
+	// Clear httpOnly refresh_token cookie via backend
+	fetch(`${API_URL}/api/auth/logout`, {
+		method: "POST",
+		credentials: "include",
+	}).catch(() => {});
 }
 
 export async function getValidToken(): Promise<string | null> {
-	let token = getAccessToken();
-	if (!token) return null;
-
-	if (isTokenExpired()) {
-		const refresh = getRefreshToken();
-		if (!refresh) {
-			clearTokens();
-			return null;
-		}
-		try {
-			const data = await refreshAccessToken(refresh);
-			saveTokens(data.access_token, data.refresh_token, data.expires_in);
-			token = data.access_token;
-		} catch {
-			clearTokens();
-			return null;
-		}
+	if (_accessToken && !isTokenExpired()) {
+		return _accessToken;
 	}
 
-	return token;
+	// Try to refresh using httpOnly cookie
+	const data = await refreshAccessToken();
+	if (data) {
+		_accessToken = data.access_token;
+		_tokenExpiry = Date.now() + data.expires_in * 1000;
+		return _accessToken;
+	}
+
+	_accessToken = null;
+	_tokenExpiry = 0;
+	return null;
 }
