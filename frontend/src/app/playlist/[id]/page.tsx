@@ -22,6 +22,10 @@ import {
   Volume2,
   Clock,
   Calendar,
+  Wand2,
+  Settings2,
+  Loader2,
+  ChevronRight,
 } from "lucide-react";
 import TrackTable from "@/components/TrackTable";
 import EnergyChart from "@/components/EnergyChart";
@@ -29,7 +33,6 @@ import SetGeneratorPanel from "@/components/SetGeneratorPanel";
 import ExportMenu from "@/components/ExportMenu";
 import MixHistory from "@/components/MixHistory";
 import AnalysisProgress from "@/components/AnalysisProgress";
-import SpotifyPlayer, { SpotifyPlayerHandle } from "@/components/SpotifyPlayer";
 
 type SortKey = "bpm" | "energy" | "key" | "danceability" | "valence" | "year" | "default";
 
@@ -44,8 +47,7 @@ export default function PlaylistPage() {
   const [sortAsc, setSortAsc] = useState(true);
   const [transitions, setTransitions] = useState<TransitionScore[]>([]);
   const [generatedSet, setGeneratedSet] = useState<GeneratedSet | null>(null);
-  const [currentSpotifyUri, setCurrentSpotifyUri] = useState<string | null>(null);
-  const playerRef = useRef<SpotifyPlayerHandle | null>(null);
+  const [advancedMode, setAdvancedMode] = useState(false);
 
   // Analysis SSE state
   const [tracks, setTracks] = useState<Track[] | null>(null);
@@ -198,6 +200,19 @@ export default function PlaylistPage() {
     generateMutation.mutate(params);
   };
 
+  // Quick generate with default params (basic mode)
+  const handleQuickGenerate = () => {
+    generateMutation.mutate({
+      energy_curve: "arc",
+      bpm_weight: 0.25,
+      key_weight: 0.25,
+      energy_weight: 0.20,
+      danceability_weight: 0.10,
+      year_weight: 0.20,
+      beam_width: 5,
+    });
+  };
+
   const formatTotalDuration = (ms: number) => {
     const hours = Math.floor(ms / 3600000);
     const mins = Math.floor((ms % 3600000) / 60000);
@@ -276,7 +291,7 @@ export default function PlaylistPage() {
   return (
     <div className="animate-fade-in">
       {/* Header */}
-      <div className="mb-8 flex items-center justify-between">
+      <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <button
             onClick={() => router.push("/")}
@@ -285,21 +300,99 @@ export default function PlaylistPage() {
             <ArrowLeft className="h-4 w-4" />
           </button>
           <div>
-            <h1 className="font-display text-2xl font-bold tracking-tight text-sand-50">Analyse de playlist</h1>
-            <p className="text-sm text-sand-300">{tracks.length} morceaux chargés</p>
+            <h1 className="font-display text-2xl font-bold tracking-tight text-sand-50">
+              {generatedSet ? "Set DJ généré" : "Analyse de playlist"}
+            </h1>
+            <p className="text-sm text-sand-300">
+              {tracks.length} morceaux
+              {stats ? ` · ${Math.round(stats.avgBpm)} BPM moy. · ${formatTotalDuration(stats.totalDuration)}` : ""}
+            </p>
           </div>
         </div>
-        <ExportMenu
-          tracks={sortedTracks}
-          transitions={transitions}
-          playlistId={playlistId}
-          playlistName="Playlist"
-        />
+        <div className="flex items-center gap-2">
+          {/* Advanced mode toggle */}
+          <button
+            onClick={() => setAdvancedMode(!advancedMode)}
+            className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm transition-all ${
+              advancedMode
+                ? "border-amber/40 bg-amber/10 text-amber"
+                : "border-deck-border text-sand-300 hover:border-sand-400 hover:text-sand-50"
+            }`}
+          >
+            <Settings2 className="h-4 w-4" />
+            <span className="hidden sm:inline">Avancé</span>
+          </button>
+          <ExportMenu
+            tracks={sortedTracks}
+            transitions={transitions}
+            playlistId={playlistId}
+            playlistName="Playlist"
+          />
+        </div>
       </div>
 
-      {/* Stats */}
+      {/* Quick action bar (basic mode) */}
+      {!advancedMode && (
+        <div className="mb-6 flex flex-wrap items-center gap-3">
+          {/* One-click generate */}
+          {!generatedSet ? (
+            <button
+              onClick={handleQuickGenerate}
+              disabled={generateMutation.isPending}
+              className="flex items-center gap-2 rounded-full bg-amber px-5 py-2.5 font-display text-sm font-semibold text-deck-bg transition-all hover:bg-amber-light hover:shadow-lg hover:shadow-amber/20 active:scale-[0.98] disabled:opacity-50"
+            >
+              {generateMutation.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Génération...
+                </>
+              ) : (
+                <>
+                  <Wand2 className="h-4 w-4" />
+                  Générer un set DJ
+                </>
+              )}
+            </button>
+          ) : (
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 rounded-full border border-amber/30 bg-amber/5 px-4 py-2">
+                <Wand2 className="h-4 w-4 text-amber" />
+                <span className="text-sm font-medium text-amber">Set généré</span>
+                <span className="text-xs text-sand-300">
+                  — {(generatedSet.total_score / Math.max(generatedSet.transitions.length, 1) * 100).toFixed(0)}% fluidité
+                </span>
+              </div>
+              <button
+                onClick={handleQuickGenerate}
+                disabled={generateMutation.isPending}
+                className="flex items-center gap-1.5 rounded-full border border-deck-border px-3 py-2 text-xs text-sand-300 transition-colors hover:border-sand-400 hover:text-sand-50"
+              >
+                {generateMutation.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Wand2 className="h-3 w-3" />
+                )}
+                Regénérer
+              </button>
+            </div>
+          )}
+
+          {/* Hint to switch to advanced */}
+          {!generatedSet && !generateMutation.isPending && (
+            <button
+              onClick={() => setAdvancedMode(true)}
+              className="flex items-center gap-1 text-xs text-sand-400 transition-colors hover:text-sand-200"
+            >
+              Personnaliser les paramètres
+              <ChevronRight className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Stats cards */}
       {stats && (
-        <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
+        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
           {[
             { label: "Morceaux", value: stats.count, icon: Music },
             { label: "BPM moyen", value: Math.round(stats.avgBpm), icon: Disc3 },
@@ -323,90 +416,117 @@ export default function PlaylistPage() {
 
       {/* Sort buttons */}
       <div className="mb-5 flex flex-wrap items-center gap-2">
-        <span className="mr-2 flex items-center gap-1 text-sm text-sand-400">
-          <ArrowUpDown className="h-3.5 w-3.5" />
-          Trier:
-        </span>
-        {sortButtons.map((btn) => (
-          <button
-            key={btn.key}
-            onClick={() => handleSort(btn.key)}
-            className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all ${
-              activeSort === btn.key
-                ? "border-amber/40 bg-amber/10 text-amber"
-                : "border-deck-border text-sand-300 hover:border-sand-400 hover:text-sand-50"
-            }`}
-          >
-            <btn.icon className="h-3 w-3" />
-            {btn.label}
-            {activeSort === btn.key && (
-              <span className="ml-0.5 font-mono">{sortAsc ? "↑" : "↓"}</span>
+          <span className="mr-2 flex items-center gap-1 text-sm text-sand-400">
+            <ArrowUpDown className="h-3.5 w-3.5" />
+            Trier:
+          </span>
+          {sortButtons.map((btn) => (
+            <button
+              key={btn.key}
+              onClick={() => handleSort(btn.key)}
+              className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all ${
+                activeSort === btn.key
+                  ? "border-amber/40 bg-amber/10 text-amber"
+                  : "border-deck-border text-sand-300 hover:border-sand-400 hover:text-sand-50"
+              }`}
+            >
+              <btn.icon className="h-3 w-3" />
+              {btn.label}
+              {activeSort === btn.key && (
+                <span className="ml-0.5 font-mono">{sortAsc ? "↑" : "↓"}</span>
+              )}
+            </button>
+          ))}
+          {activeSort !== "default" && (
+            <button
+              onClick={() => handleSort("default")}
+              className="ml-1 text-xs text-sand-400 underline hover:text-sand-50"
+            >
+              Réinitialiser
+            </button>
+          )}
+        </div>
+
+      {/* Main content */}
+      {advancedMode ? (
+        /* Advanced layout: 2 columns */
+        <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+          <div className="space-y-4">
+            {/* Energy chart */}
+            <EnergyChart tracks={sortedTracks} transitions={transitions} />
+
+            {/* Generated set score banner */}
+            {generatedSet && (
+              <div className="flex items-center justify-between rounded-xl border border-amber/20 bg-amber/5 px-4 py-3">
+                <div>
+                  <span className="text-sm font-semibold text-amber">
+                    Set DJ généré
+                  </span>
+                  <span className="ml-2 text-xs text-sand-300">
+                    Score global: {(generatedSet.total_score / Math.max(generatedSet.transitions.length, 1) * 100).toFixed(1)}%
+                  </span>
+                </div>
+                <span className="text-xs text-sand-400">
+                  {generatedSet.transitions.filter((t) => t.total_score >= 0.8).length}/
+                  {generatedSet.transitions.length} transitions fluides
+                </span>
+              </div>
             )}
-          </button>
-        ))}
-        {activeSort !== "default" && (
-          <button
-            onClick={() => handleSort("default")}
-            className="ml-1 text-xs text-sand-400 underline hover:text-sand-50"
-          >
-            Réinitialiser
-          </button>
-        )}
-      </div>
 
-      {/* Main content: 2 columns on large screens */}
-      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+            {/* Track table - full columns */}
+            <TrackTable
+              tracks={sortedTracks}
+              transitions={transitions}
+              onReorder={handleReorder}
+              compact={false}
+            />
+          </div>
+
+          {/* Sidebar: Set generator */}
+          <div className="lg:sticky lg:top-16 lg:self-start space-y-4">
+            <SetGeneratorPanel
+              onGenerate={handleGenerate}
+              isLoading={generateMutation.isPending}
+            />
+            <MixHistory playlistId={playlistId} />
+          </div>
+        </div>
+      ) : (
+        /* Basic layout: single clean column */
         <div className="space-y-4">
-          {/* Energy chart */}
-          <EnergyChart tracks={sortedTracks} transitions={transitions} />
-
           {/* Generated set score banner */}
           {generatedSet && (
             <div className="flex items-center justify-between rounded-xl border border-amber/20 bg-amber/5 px-4 py-3">
-              <div>
-                <span className="text-sm font-semibold text-amber">
-                  Set DJ généré
-                </span>
-                <span className="ml-2 text-xs text-sand-300">
-                  Score global: {(generatedSet.total_score / Math.max(generatedSet.transitions.length, 1) * 100).toFixed(1)}%
-                </span>
+              <div className="flex items-center gap-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-amber/20">
+                  <Wand2 className="h-4 w-4 text-amber" />
+                </div>
+                <div>
+                  <span className="text-sm font-semibold text-amber">Set optimisé</span>
+                  <span className="ml-2 text-xs text-sand-300">
+                    {generatedSet.transitions.filter((t) => t.total_score >= 0.8).length}/{generatedSet.transitions.length} transitions fluides
+                  </span>
+                </div>
               </div>
-              <span className="text-xs text-sand-400">
-                {generatedSet.transitions.filter((t) => t.total_score >= 0.8).length}/
-                {generatedSet.transitions.length} transitions fluides
+              <span className="rounded-full bg-amber/10 px-3 py-1 font-mono text-sm font-bold text-amber">
+                {(generatedSet.total_score / Math.max(generatedSet.transitions.length, 1) * 100).toFixed(0)}%
               </span>
             </div>
           )}
 
-          {/* Track table */}
+          {/* Track table - compact */}
           <TrackTable
             tracks={sortedTracks}
             transitions={transitions}
             onReorder={handleReorder}
-            currentSpotifyUri={currentSpotifyUri}
-            onPlaySpotify={(uri) => playerRef.current?.playFromTrack(uri)}
+            compact={true}
           />
-        </div>
 
-        {/* Sidebar: Set generator */}
-        <div className="lg:sticky lg:top-16 lg:self-start">
-          <SetGeneratorPanel
-            onGenerate={handleGenerate}
-            isLoading={generateMutation.isPending}
-          />
+          {/* Mix history */}
           <MixHistory playlistId={playlistId} />
         </div>
-      </div>
+      )}
 
-      {/* Spotify Player - fixed bottom bar */}
-      <SpotifyPlayer
-        ref={playerRef}
-        tracks={sortedTracks}
-        onTrackChange={setCurrentSpotifyUri}
-      />
-
-      {/* Bottom spacer for fixed player */}
-      <div className="h-20" />
     </div>
   );
 }

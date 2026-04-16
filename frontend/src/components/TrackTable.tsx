@@ -26,6 +26,7 @@ interface TrackTableProps {
   onReorder: (tracks: Track[]) => void;
   currentSpotifyUri?: string | null;
   onPlaySpotify?: (uri: string) => void;
+  compact?: boolean;
 }
 
 function formatDuration(ms: number): string {
@@ -58,6 +59,7 @@ function SortableRow({
   onTogglePlay,
   isSpotifyPlaying,
   onPlaySpotify,
+  compact,
 }: {
   track: Track;
   index: number;
@@ -68,6 +70,7 @@ function SortableRow({
   onTogglePlay: (track: Track) => void;
   isSpotifyPlaying: boolean;
   onPlaySpotify?: (uri: string) => void;
+  compact?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition: dndTransition } =
     useSortable({ id: track.id });
@@ -82,7 +85,7 @@ function SortableRow({
   return (
     <>
       {/* Transition indicator between rows */}
-      {index > 0 && transition && (
+      {index > 0 && transition && !compact && (
         <tr>
           <td colSpan={10} className="py-0.5 px-4">
             <div className="flex justify-center">
@@ -98,11 +101,13 @@ function SortableRow({
           isSpotifyPlaying ? "bg-amber/5" : isPlaying ? "bg-amber/[0.03]" : "hover:bg-deck-surface/50"
         }`}
       >
-        <td className="w-8 px-2 py-2">
-          <button {...attributes} {...listeners} className="cursor-grab text-sand-500 hover:text-sand-200">
-            <GripVertical className="h-4 w-4" />
-          </button>
-        </td>
+        {!compact && (
+          <td className="w-8 px-2 py-2">
+            <button {...attributes} {...listeners} className="cursor-grab text-sand-500 hover:text-sand-200">
+              <GripVertical className="h-4 w-4" />
+            </button>
+          </td>
+        )}
         <td className="w-8 px-2 py-2 font-mono text-sm text-sand-400">{index + 1}</td>
         <td className="px-2 py-2">
           <div className="flex items-center gap-3">
@@ -196,15 +201,21 @@ function SortableRow({
             "—"
           )}
         </td>
+        {!compact && (
         <td className="px-2 py-2 text-center font-mono text-xs tabular-nums text-sand-300">
           {af ? (af.danceability * 100).toFixed(0) : "—"}
         </td>
+        )}
+        {!compact && (
         <td className="px-2 py-2 text-center font-mono text-xs tabular-nums text-sand-400">
           {track.release_year ?? "—"}
         </td>
+        )}
+        {!compact && (
         <td className="px-2 py-2 text-right font-mono text-xs tabular-nums text-sand-400">
           {formatDuration(track.duration_ms)}
         </td>
+        )}
         <td className="px-2 py-2 text-center">
           {onPlaySpotify && (
             <button
@@ -225,7 +236,7 @@ function SortableRow({
   );
 }
 
-export default function TrackTable({ tracks, transitions, onReorder, currentSpotifyUri, onPlaySpotify }: TrackTableProps) {
+export default function TrackTable({ tracks, transitions, onReorder, currentSpotifyUri, onPlaySpotify, compact }: TrackTableProps) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
   );
@@ -347,15 +358,15 @@ export default function TrackTable({ tracks, transitions, onReorder, currentSpot
           <table className="w-full text-left">
             <thead>
               <tr className="border-b border-deck-border text-xs uppercase tracking-wider text-sand-400">
-                <th className="w-8 px-2 py-3" />
+                {!compact && <th className="w-8 px-2 py-3" />}
                 <th className="w-8 px-2 py-3 font-mono">#</th>
                 <th className="px-2 py-3">Titre</th>
                 <th className="px-2 py-3 text-center font-mono">BPM</th>
                 <th className="px-2 py-3 text-center font-mono">Key</th>
                 <th className="px-2 py-3">Énergie</th>
-                <th className="px-2 py-3 text-center font-mono">Dance</th>
-                <th className="px-2 py-3 text-center font-mono">Année</th>
-                <th className="px-2 py-3 text-right font-mono">Durée</th>
+                {!compact && <th className="px-2 py-3 text-center font-mono">Dance</th>}
+                {!compact && <th className="px-2 py-3 text-center font-mono">Année</th>}
+                {!compact && <th className="px-2 py-3 text-right font-mono">Durée</th>}
                 {onPlaySpotify && <th className="px-2 py-3 text-center w-10">
                   <Headphones className="h-3 w-3 mx-auto text-sand-400" />
                 </th>}
@@ -374,6 +385,7 @@ export default function TrackTable({ tracks, transitions, onReorder, currentSpot
                   onTogglePlay={handleTogglePlay}
                   isSpotifyPlaying={currentSpotifyUri === track.uri}
                   onPlaySpotify={onPlaySpotify}
+                  compact={compact}
                 />
               ))}
             </tbody>
