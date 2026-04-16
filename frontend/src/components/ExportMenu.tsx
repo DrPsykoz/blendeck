@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Track, TransitionScore, exportNewPlaylist, exportReorder, exportFile, generateMix, mixDownloadUrl, MixProgress, TransitionConfig } from "@/lib/api";
+import { Track, TransitionScore, exportNewPlaylist, exportReorder, exportFile, generateMix, downloadMix, MixProgress, TransitionConfig } from "@/lib/api";
 import { Download, ListPlus, ArrowUpDown, FileDown, Loader2, Check, Music } from "lucide-react";
 
 interface ExportMenuProps {
@@ -124,10 +124,7 @@ export default function ExportMenu({
         setMixPhase("done");
         setTimeout(() => setSuccess(null), 5000);
         // Auto-download
-        const a = document.createElement("a");
-        a.href = mixDownloadUrl(id);
-        a.download = `dj-mix.mp3`;
-        a.click();
+        downloadMix(id).catch((e) => console.error("Download failed:", e));
         // Reload history
         if (typeof (window as any).__reloadMixHistory === "function") (window as any).__reloadMixHistory();
       },
@@ -142,10 +139,7 @@ export default function ExportMenu({
 
   const handleDownloadMix = () => {
     if (!mixId) return;
-    const a = document.createElement("a");
-    a.href = mixDownloadUrl(mixId);
-    a.download = `dj-mix.mp3`;
-    a.click();
+    downloadMix(mixId).catch((e) => alert(`Erreur téléchargement: ${(e as Error).message}`));
   };
 
   const ButtonIcon = ({ id, icon: Icon }: { id: string; icon: typeof Download }) => {
@@ -158,7 +152,7 @@ export default function ExportMenu({
     <div className="relative">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 rounded-lg border border-spotify-gray px-4 py-2 text-sm transition-colors hover:border-spotify-green hover:text-spotify-green"
+        className="flex items-center gap-2 rounded-lg border border-deck-border px-4 py-2 text-sm transition-colors hover:border-amber hover:text-amber"
       >
         <Download className="h-4 w-4" />
         Exporter
@@ -167,68 +161,68 @@ export default function ExportMenu({
       {isOpen && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)} />
-          <div className="absolute right-0 top-full z-20 mt-2 w-64 rounded-xl border border-spotify-gray bg-spotify-black p-2 shadow-xl">
+          <div className="absolute right-0 top-full z-20 mt-2 w-64 rounded-xl border border-deck-border bg-deck-card p-2 shadow-xl">
             <button
               onClick={handleNewPlaylist}
               disabled={loading !== null}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm hover:bg-spotify-gray/50 disabled:opacity-50"
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm hover:bg-deck-surface disabled:opacity-50"
             >
               <ButtonIcon id="new" icon={ListPlus} />
               <div>
-                <div className="font-medium">Nouvelle playlist</div>
-                <div className="text-xs text-spotify-light">Créer &quot;{playlistName} — DJ Mix&quot;</div>
+                <div className="font-medium text-sand-50">Nouvelle playlist</div>
+                <div className="text-xs text-sand-400">Créer &quot;{playlistName} — DJ Mix&quot;</div>
               </div>
             </button>
 
             <button
               onClick={handleReorder}
               disabled={loading !== null}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm hover:bg-spotify-gray/50 disabled:opacity-50"
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm hover:bg-deck-surface disabled:opacity-50"
             >
               <ButtonIcon id="reorder" icon={ArrowUpDown} />
               <div>
-                <div className="font-medium">Réorganiser l&apos;existante</div>
-                <div className="text-xs text-spotify-light">Modifier l&apos;ordre actuel</div>
+                <div className="font-medium text-sand-50">Réorganiser l&apos;existante</div>
+                <div className="text-xs text-sand-400">Modifier l&apos;ordre actuel</div>
               </div>
             </button>
 
-            <div className="my-1 border-t border-spotify-gray" />
+            <div className="my-1 border-t border-deck-border" />
 
             <button
               onClick={() => handleExportFile("csv")}
               disabled={loading !== null}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm hover:bg-spotify-gray/50 disabled:opacity-50"
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm hover:bg-deck-surface disabled:opacity-50"
             >
               <ButtonIcon id="csv" icon={FileDown} />
               <div>
-                <div className="font-medium">Exporter CSV</div>
-                <div className="text-xs text-spotify-light">Tableur compatible</div>
+                <div className="font-medium text-sand-50">Exporter CSV</div>
+                <div className="text-xs text-sand-400">Tableur compatible</div>
               </div>
             </button>
 
             <button
               onClick={() => handleExportFile("json")}
               disabled={loading !== null}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm hover:bg-spotify-gray/50 disabled:opacity-50"
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm hover:bg-deck-surface disabled:opacity-50"
             >
               <ButtonIcon id="json" icon={FileDown} />
               <div>
-                <div className="font-medium">Exporter JSON</div>
-                <div className="text-xs text-spotify-light">Format développeur</div>
+                <div className="font-medium text-sand-50">Exporter JSON</div>
+                <div className="text-xs text-sand-400">Format développeur</div>
               </div>
             </button>
 
-            <div className="my-1 border-t border-spotify-gray" />
+            <div className="my-1 border-t border-deck-border" />
 
             <button
               onClick={() => { setIsOpen(false); setShowMixSettings(true); }}
               disabled={loading !== null}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm hover:bg-spotify-gray/50 disabled:opacity-50"
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm hover:bg-deck-surface disabled:opacity-50"
             >
               <ButtonIcon id="mix" icon={Music} />
               <div>
-                <div className="font-medium">Générer Mix MP3</div>
-                <div className="text-xs text-spotify-light">Télécharge &amp; concatène avec crossfade</div>
+                <div className="font-medium text-sand-50">Générer Mix MP3</div>
+                <div className="text-xs text-sand-400">Télécharge &amp; concatène avec crossfade</div>
               </div>
             </button>
           </div>
@@ -239,13 +233,13 @@ export default function ExportMenu({
       {showMixSettings && !loading && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setShowMixSettings(false)} />
-          <div className="absolute right-0 top-full z-20 mt-2 w-80 rounded-xl border border-spotify-gray bg-spotify-black p-4 shadow-xl">
-            <div className="mb-4 text-sm font-medium">Paramètres du mix</div>
+          <div className="absolute right-0 top-full z-20 mt-2 w-80 rounded-xl border border-deck-border bg-deck-card p-4 shadow-xl">
+            <div className="mb-4 text-sm font-display font-medium text-sand-50">Paramètres du mix</div>
 
             <div className="mb-4">
-              <label className="mb-1 flex items-center justify-between text-xs text-spotify-light">
+              <label className="mb-1 flex items-center justify-between text-xs text-sand-300">
                 <span>Crossfade</span>
-                <span className="font-mono text-spotify-green">{crossfade}s</span>
+                <span className="font-mono text-amber">{crossfade}s</span>
               </label>
               <input
                 type="range"
@@ -253,18 +247,18 @@ export default function ExportMenu({
                 max={15}
                 value={crossfade}
                 onChange={(e) => setCrossfade(Number(e.target.value))}
-                className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-spotify-gray accent-spotify-green"
+                className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-deck-surface"
               />
-              <div className="flex justify-between text-[10px] text-spotify-light/50">
+              <div className="flex justify-between text-[10px] text-sand-500">
                 <span>0s</span>
                 <span>15s</span>
               </div>
             </div>
 
             <div className="mb-4">
-              <label className="mb-1 flex items-center justify-between text-xs text-spotify-light">
+              <label className="mb-1 flex items-center justify-between text-xs text-sand-300">
                 <span>Durée par piste</span>
-                <span className="font-mono text-spotify-green">
+                <span className="font-mono text-amber">
                   {targetDuration === 0 ? "Complète" : `~${Math.floor(targetDuration / 60)}:${String(targetDuration % 60).padStart(2, "0")}`}
                 </span>
               </label>
@@ -275,21 +269,21 @@ export default function ExportMenu({
                 step={15}
                 value={targetDuration}
                 onChange={(e) => setTargetDuration(Number(e.target.value))}
-                className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-spotify-gray accent-spotify-green"
+                className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-deck-surface"
               />
-              <div className="flex justify-between text-[10px] text-spotify-light/50">
+              <div className="flex justify-between text-[10px] text-sand-500">
                 <span>Complète</span>
                 <span>5:00</span>
               </div>
               {targetDuration > 0 && (
-                <p className="mt-1 text-[10px] text-spotify-light/70">
+                <p className="mt-1 text-[10px] text-sand-400">
                   Les pistes trop longues seront coupées sur le meilleur passage
                 </p>
               )}
             </div>
 
             <div className="mb-4">
-              <label className="mb-2 block text-xs text-spotify-light">Style de transition</label>
+              <label className="mb-2 block text-xs text-sand-300">Style de transition</label>
               <div className="grid grid-cols-3 gap-1.5">
                 {([
                   { value: "crossfade", label: "Crossfade", desc: "Fondu croisé linéaire" },
@@ -304,8 +298,8 @@ export default function ExportMenu({
                     onClick={() => setTransitionStyle(t.value)}
                     className={`rounded-lg border px-2 py-1.5 text-center text-[11px] transition-colors ${
                       transitionStyle === t.value
-                        ? "border-spotify-green bg-spotify-green/10 text-spotify-green"
-                        : "border-spotify-gray text-spotify-light hover:border-spotify-light"
+                        ? "border-amber/40 bg-amber/10 text-amber"
+                        : "border-deck-border text-sand-300 hover:border-deck-muted"
                     }`}
                     title={t.desc}
                   >
@@ -313,7 +307,7 @@ export default function ExportMenu({
                   </button>
                 ))}
               </div>
-              <p className="mt-1.5 text-[10px] text-spotify-light/70">
+              <p className="mt-1.5 text-[10px] text-sand-400">
                 {transitionStyle === "auto"
                   ? "Analyse le BPM et l'énergie pour choisir le meilleur style"
                   : transitionStyle === "crossfade"
@@ -329,14 +323,14 @@ export default function ExportMenu({
             </div>
 
             {targetDuration > 0 && (
-              <div className="mb-3 rounded-lg bg-spotify-gray/30 px-3 py-2 text-xs text-spotify-light">
+              <div className="mb-3 rounded-lg bg-deck-surface px-3 py-2 text-xs text-sand-300">
                 Durée estimée : ~{Math.round((tracks.length * targetDuration - (tracks.length - 1) * crossfade) / 60)} min
               </div>
             )}
 
             <button
               onClick={handleMix}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-spotify-green px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-green-400"
+              className="flex w-full items-center justify-center gap-2 rounded-full bg-amber px-4 py-2.5 font-display text-sm font-semibold text-deck-bg transition-all hover:bg-amber-light hover:shadow-lg hover:shadow-amber/20"
             >
               <Music className="h-4 w-4" />
               Lancer la génération
@@ -347,14 +341,14 @@ export default function ExportMenu({
 
       {/* Mix progress overlay */}
       {loading === "mix" && mixProgress && (
-        <div className="fixed bottom-24 right-4 z-50 w-96 rounded-xl border border-spotify-gray bg-spotify-black p-4 shadow-2xl">
+        <div className="fixed bottom-24 right-4 z-50 w-96 rounded-xl border border-deck-border bg-deck-card p-4 shadow-2xl">
           {/* Header with elapsed time */}
           <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <Loader2 className="h-4 w-4 animate-spin text-spotify-green" />
+            <div className="flex items-center gap-2 text-sm font-medium text-sand-50">
+              <Loader2 className="h-4 w-4 animate-spin text-amber" />
               Génération du mix
             </div>
-            <span className="font-mono text-xs text-spotify-light">{elapsed}</span>
+            <span className="font-mono text-xs text-sand-400">{elapsed}</span>
           </div>
 
           {/* Step indicators */}
@@ -375,12 +369,12 @@ export default function ExportMenu({
               return (
                 <div key={step.key} className="flex flex-1 items-center gap-1">
                   <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] transition-all ${
-                    isDone ? "bg-spotify-green text-black" : isActive ? "bg-spotify-green/20 text-spotify-green ring-1 ring-spotify-green" : "bg-spotify-gray/50 text-spotify-light/50"
+                    isDone ? "bg-amber text-deck-bg" : isActive ? "bg-amber/20 text-amber ring-1 ring-amber" : "bg-deck-surface text-sand-500"
                   }`}>
                     {isDone ? "✓" : step.icon}
                   </div>
                   {idx < arr.length - 1 && (
-                    <div className={`h-0.5 flex-1 rounded-full transition-all ${isDone ? "bg-spotify-green" : "bg-spotify-gray/50"}`} />
+                    <div className={`h-0.5 flex-1 rounded-full transition-all ${isDone ? "bg-amber" : "bg-deck-surface"}`} />
                   )}
                 </div>
               );
@@ -388,20 +382,20 @@ export default function ExportMenu({
           </div>
 
           {/* Current action detail */}
-          <div className="mb-2 text-xs text-spotify-light truncate">
+          <div className="mb-2 text-xs text-sand-300 truncate">
             {mixProgress.detail}
           </div>
 
           {/* Progress bar — shown when we have current/total */}
           {mixProgress.total > 0 && (
             <div className="mb-2">
-              <div className="h-2 w-full overflow-hidden rounded-full bg-spotify-gray">
+              <div className="h-2 w-full overflow-hidden rounded-full bg-deck-surface">
                 <div
-                  className="h-full rounded-full bg-spotify-green transition-all duration-300"
+                  className="h-full rounded-full bg-amber transition-all duration-300"
                   style={{ width: `${Math.round((mixProgress.current / mixProgress.total) * 100)}%` }}
                 />
               </div>
-              <div className="mt-1 flex items-center justify-between text-[11px] text-spotify-light">
+              <div className="mt-1 flex items-center justify-between text-[11px] text-sand-400">
                 <span>
                   {mixPhase === "downloading" || mixPhase === "cached"
                     ? `Piste ${mixProgress.current}/${mixProgress.total}`
@@ -418,7 +412,7 @@ export default function ExportMenu({
 
           {/* Activity log — last 4 events */}
           {mixLog.length > 0 && (
-            <div className="mt-2 max-h-24 space-y-0.5 overflow-hidden border-t border-spotify-gray/50 pt-2">
+            <div className="mt-2 max-h-24 space-y-0.5 overflow-hidden border-t border-deck-border/50 pt-2">
               {mixLog.slice(-4).map((log, i) => (
                 <div key={i} className="flex items-center gap-1.5 text-[10px]">
                   <span className={
@@ -426,7 +420,7 @@ export default function ExportMenu({
                     log.status === "downloading" ? "text-yellow-400" :
                     log.status === "skipped" ? "text-red-400" :
                     log.status === "downloaded" ? "text-green-400" :
-                    "text-spotify-light/60"
+                    "text-sand-500"
                   }>
                     {log.status === "cached" ? "● cache" :
                      log.status === "downloading" ? "● téléch." :
@@ -437,7 +431,7 @@ export default function ExportMenu({
                      log.status === "mixing" ? "🎛 mixage" :
                      "●"}
                   </span>
-                  <span className="truncate text-spotify-light/70">{log.detail}</span>
+                  <span className="truncate text-sand-400">{log.detail}</span>
                 </div>
               ))}
             </div>
@@ -447,20 +441,20 @@ export default function ExportMenu({
 
       {/* Mix ready - download button */}
       {mixId && success === "mix" && (
-        <div className="fixed bottom-24 right-4 z-50 w-96 rounded-xl border border-spotify-green bg-spotify-black p-4 shadow-2xl">
+        <div className="fixed bottom-24 right-4 z-50 w-96 rounded-xl border border-amber/30 bg-deck-card p-4 shadow-2xl">
           <div className="mb-2 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm font-medium text-spotify-green">
+            <div className="flex items-center gap-2 text-sm font-medium text-amber">
               <Check className="h-4 w-4" />
               Mix prêt !
             </div>
-            <span className="font-mono text-xs text-spotify-light">{elapsed}</span>
+            <span className="font-mono text-xs text-sand-400">{elapsed}</span>
           </div>
-          <p className="mb-3 text-xs text-spotify-light">
+          <p className="mb-3 text-xs text-sand-300">
             {tracks.length} pistes · Téléchargement automatique lancé
           </p>
           <button
             onClick={handleDownloadMix}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-spotify-green px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-green-400"
+            className="flex w-full items-center justify-center gap-2 rounded-full bg-amber px-4 py-2.5 font-display text-sm font-semibold text-deck-bg transition-all hover:bg-amber-light hover:shadow-lg hover:shadow-amber/20"
           >
             <Download className="h-4 w-4" />
             Re-télécharger le mix MP3

@@ -1,6 +1,8 @@
 from __future__ import annotations
 import json
+import os
 import httpx
+from pathlib import Path
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -58,7 +60,6 @@ async def playlist_tracks(playlist_id: str, authorization: str = Header()):
 
 @router.get("/{playlist_id}/analyze")
 async def analyze_playlist_sse(playlist_id: str, authorization: str = Header()):
-    _validate_playlist_id(playlist_id)
     """Stream analysis progress via Server-Sent Events.
 
     Events:
@@ -67,6 +68,7 @@ async def analyze_playlist_sse(playlist_id: str, authorization: str = Header()):
       - type=complete: {tracks: [...]}  (full track list with features)
       - type=error: {message}
     """
+    _validate_playlist_id(playlist_id)
     token = _extract_token(authorization)
 
     async def event_stream():
@@ -228,9 +230,6 @@ async def get_preview_url(track_id: str, name: str = "", artist: str = ""):
     return {"preview_url": None}
 
 
-import os
-from pathlib import Path
-
 PREVIEW_DIR = Path(os.getenv("CACHE_DIR", "/app/cache")) / "previews"
 
 
@@ -258,8 +257,11 @@ async def stream_preview(track_id: str, name: str = "", artist: str = ""):
     if url and url.startswith("local:"):
         local_path = PREVIEW_DIR / f"{track_id}.mp3"
         if local_path.exists():
+            def _iter_file():
+                with open(local_path, "rb") as f:
+                    yield from iter(lambda: f.read(8192), b"")
             return StreamingResponse(
-                open(local_path, "rb"),
+                _iter_file(),
                 media_type="audio/mpeg",
                 headers={"Cache-Control": "public, max-age=3600"},
             )

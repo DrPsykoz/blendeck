@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { MixHistoryEntry, fetchMixHistory, mixStreamUrl, mixDownloadUrl } from "@/lib/api";
+import { MixHistoryEntry, fetchMixHistory, loadMixAudioUrl, downloadMix } from "@/lib/api";
 import { Download, Play, Pause, Clock, Music, ChevronDown, ChevronUp } from "lucide-react";
 
 function formatTime(seconds: number): string {
@@ -82,24 +82,30 @@ export default function MixHistory({ playlistId }: { playlistId: string }) {
       audioRef.current = null;
     }
 
-    const audio = new Audio(mixStreamUrl(mixId));
+    const audio = new Audio();
     audioRef.current = audio;
     setPlayingId(mixId);
     setProgress(0);
     setDuration(0);
 
-    audio.addEventListener("loadedmetadata", () => {
-      setDuration(audio.duration);
-    });
-    audio.addEventListener("timeupdate", () => {
-      setProgress(audio.currentTime);
-    });
-    audio.addEventListener("ended", () => {
+    loadMixAudioUrl(mixId).then((blobUrl) => {
+      audio.src = blobUrl;
+      audio.addEventListener("loadedmetadata", () => {
+        setDuration(audio.duration);
+      });
+      audio.addEventListener("timeupdate", () => {
+        setProgress(audio.currentTime);
+      });
+      audio.addEventListener("ended", () => {
+        setPlayingId(null);
+        setProgress(0);
+        URL.revokeObjectURL(blobUrl);
+      });
+      audio.play();
+    }).catch((e) => {
+      console.error("Stream failed:", e);
       setPlayingId(null);
-      setProgress(0);
     });
-
-    audio.play();
   };
 
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -110,54 +116,51 @@ export default function MixHistory({ playlistId }: { playlistId: string }) {
   };
 
   const handleDownload = (mixId: string) => {
-    const a = document.createElement("a");
-    a.href = mixDownloadUrl(mixId);
-    a.download = `dj-mix-${mixId}.mp3`;
-    a.click();
+    downloadMix(mixId).catch((e) => alert(`Erreur téléchargement: ${(e as Error).message}`));
   };
 
   if (history.length === 0) return null;
 
   return (
-    <div className="mt-4 rounded-xl border border-spotify-gray bg-spotify-darkgray/50 overflow-hidden">
+    <div className="mt-4 rounded-xl border border-deck-border bg-deck-card overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium hover:bg-spotify-gray/30 transition-colors"
+        className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium text-sand-50 hover:bg-deck-surface transition-colors"
       >
         <div className="flex items-center gap-2">
-          <Clock className="h-4 w-4 text-spotify-light" />
+          <Clock className="h-4 w-4 text-sand-400" />
           <span>Historique des mix ({history.length})</span>
         </div>
-        {expanded ? <ChevronUp className="h-4 w-4 text-spotify-light" /> : <ChevronDown className="h-4 w-4 text-spotify-light" />}
+        {expanded ? <ChevronUp className="h-4 w-4 text-sand-400" /> : <ChevronDown className="h-4 w-4 text-sand-400" />}
       </button>
 
       {expanded && (
-        <div className="border-t border-spotify-gray">
+        <div className="border-t border-deck-border">
           {history.map((entry) => {
             const isPlaying = playingId === entry.mix_id;
             return (
               <div
                 key={entry.mix_id}
-                className={`border-b border-spotify-gray/50 px-4 py-3 last:border-b-0 ${
-                  isPlaying ? "bg-spotify-green/5" : ""
+                className={`border-b border-deck-border/50 px-4 py-3 last:border-b-0 ${
+                  isPlaying ? "bg-amber/5" : ""
                 }`}
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 text-sm">
-                      <Music className="h-3.5 w-3.5 shrink-0 text-spotify-light" />
-                      <span className="font-medium truncate">
+                      <Music className="h-3.5 w-3.5 shrink-0 text-sand-400" />
+                      <span className="font-medium text-sand-50 truncate">
                         {entry.track_count} pistes — {STYLE_LABELS[entry.transition_style] || entry.transition_style}
                       </span>
-                      <span className="shrink-0 text-xs text-spotify-light">
+                      <span className="shrink-0 text-xs text-sand-400">
                         {entry.size_mb} MB
                       </span>
                     </div>
-                    <div className="mt-0.5 text-[11px] text-spotify-light truncate">
+                    <div className="mt-0.5 text-[11px] text-sand-300 truncate">
                       {entry.track_names.slice(0, 4).join(" → ")}
                       {entry.track_names.length > 4 && ` → +${entry.track_names.length - 4}`}
                     </div>
-                    <div className="mt-0.5 text-[10px] text-spotify-light/60">
+                    <div className="mt-0.5 text-[10px] text-sand-500">
                       {formatDate(entry.created_at)} · Crossfade {entry.crossfade_s}s
                     </div>
                   </div>
@@ -167,8 +170,8 @@ export default function MixHistory({ playlistId }: { playlistId: string }) {
                       onClick={() => handlePlay(entry.mix_id)}
                       className={`rounded-full p-2 transition-colors ${
                         isPlaying
-                          ? "bg-spotify-green text-black"
-                          : "bg-spotify-gray/50 text-spotify-light hover:bg-spotify-gray hover:text-white"
+                          ? "bg-amber text-deck-bg"
+                          : "bg-deck-surface text-sand-300 hover:bg-deck-muted hover:text-sand-50"
                       }`}
                       title={isPlaying ? "Pause" : "Écouter"}
                     >
@@ -180,7 +183,7 @@ export default function MixHistory({ playlistId }: { playlistId: string }) {
                     </button>
                     <button
                       onClick={() => handleDownload(entry.mix_id)}
-                      className="rounded-full bg-spotify-gray/50 p-2 text-spotify-light transition-colors hover:bg-spotify-gray hover:text-white"
+                      className="rounded-full bg-deck-surface p-2 text-sand-300 transition-colors hover:bg-deck-muted hover:text-sand-50"
                       title="Télécharger"
                     >
                       <Download className="h-3.5 w-3.5" />
@@ -192,15 +195,15 @@ export default function MixHistory({ playlistId }: { playlistId: string }) {
                 {isPlaying && duration > 0 && (
                   <div className="mt-2">
                     <div
-                      className="h-1.5 w-full cursor-pointer rounded-full bg-spotify-gray"
+                      className="h-1.5 w-full cursor-pointer rounded-full bg-deck-surface"
                       onClick={handleSeek}
                     >
                       <div
-                        className="h-full rounded-full bg-spotify-green transition-all duration-200"
+                        className="h-full rounded-full bg-amber transition-all duration-200"
                         style={{ width: `${(progress / duration) * 100}%` }}
                       />
                     </div>
-                    <div className="mt-0.5 flex justify-between text-[10px] text-spotify-light/60">
+                    <div className="mt-0.5 flex justify-between text-[10px] text-sand-500">
                       <span>{formatTime(progress)}</span>
                       <span>{formatTime(duration)}</span>
                     </div>

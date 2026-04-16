@@ -458,6 +458,35 @@ export function mixStreamUrl(mixId: string): string {
 	return `${API_URL}/api/export/mix/${mixId}/stream`;
 }
 
+/** Fetch mix MP3 with auth and trigger a browser download. */
+export async function downloadMix(mixId: string): Promise<void> {
+	const token = await getValidToken();
+	if (!token) throw new Error("Not authenticated");
+	const res = await fetch(`${API_URL}/api/export/mix/${mixId}`, {
+		headers: { Authorization: `Bearer ${token}` },
+	});
+	if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+	const blob = await res.blob();
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement("a");
+	a.href = url;
+	a.download = `dj-mix-${mixId}.mp3`;
+	a.click();
+	URL.revokeObjectURL(url);
+}
+
+/** Fetch mix MP3 as a blob URL for audio playback (with auth). */
+export async function loadMixAudioUrl(mixId: string): Promise<string> {
+	const token = await getValidToken();
+	if (!token) throw new Error("Not authenticated");
+	const res = await fetch(`${API_URL}/api/export/mix/${mixId}/stream`, {
+		headers: { Authorization: `Bearer ${token}` },
+	});
+	if (!res.ok) throw new Error(`Stream failed: ${res.status}`);
+	const blob = await res.blob();
+	return URL.createObjectURL(blob);
+}
+
 export interface MixHistoryEntry {
 	mix_id: string;
 	created_at: number;
