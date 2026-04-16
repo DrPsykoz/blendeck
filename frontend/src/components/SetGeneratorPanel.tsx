@@ -49,83 +49,80 @@ export default function SetGeneratorPanel({ onGenerate, isLoading }: SetGenerato
   const totalWeight = bpmWeight + keyWeight + energyWeight + danceWeight + yearWeight;
 
   return (
-    <div className="rounded-xl border border-spotify-gray bg-spotify-gray/30 p-5">
-      <h3 className="mb-4 flex items-center gap-2 text-lg font-semibold">
-        <Wand2 className="h-5 w-5 text-spotify-green" />
+    <div className="rounded-xl border border-deck-border bg-deck-card p-5">
+      <h3 className="mb-4 flex items-center gap-2 font-display text-lg font-semibold text-sand-50">
+        <Wand2 className="h-5 w-5 text-amber" />
         Générer un Set DJ
       </h3>
 
-      {/* Energy curve selection */}
       <div className="mb-4">
-        <label className="mb-2 block text-sm text-spotify-light">Courbe d&apos;énergie</label>
+        <label className="mb-2 block text-sm text-sand-300">Courbe d&apos;énergie</label>
         <div className="grid grid-cols-2 gap-2">
           {curves.map((c) => (
             <button
               key={c.value}
               onClick={() => setEnergyCurve(c.value)}
-              className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+              className={`rounded-lg border px-3 py-2 text-left text-sm transition-all ${
                 energyCurve === c.value
-                  ? "border-spotify-green bg-spotify-green/10 text-white"
-                  : "border-spotify-gray text-spotify-light hover:border-white/30"
+                  ? "border-amber/40 bg-amber/10 text-sand-50"
+                  : "border-deck-border text-sand-300 hover:border-deck-muted"
               }`}
             >
               <div className="font-medium">{c.label}</div>
-              <div className="text-xs opacity-60">{c.desc}</div>
+              <div className="text-xs text-sand-400">{c.desc}</div>
             </button>
           ))}
         </div>
       </div>
 
-      {/* Weight sliders */}
       <div className="mb-4 space-y-3">
         <div className="mb-1 flex items-center justify-between">
-          <label className="text-sm text-spotify-light">Poids des critères</label>
-          <span className="text-[10px] text-spotify-light/50">
-            Les poids sont normalisés automatiquement
+          <label className="text-sm text-sand-300">Poids des critères</label>
+          <span className="text-[10px] text-sand-400">
+            Normalisés automatiquement
           </span>
         </div>
 
         {[
-          { label: "BPM", value: bpmWeight, set: setBpmWeight, color: "accent-red-500" },
-          { label: "Tonalité", value: keyWeight, set: setKeyWeight, color: "accent-blue-500" },
-          { label: "Énergie", value: energyWeight, set: setEnergyWeight, color: "accent-green-500" },
-          { label: "Danceability", value: danceWeight, set: setDanceWeight, color: "accent-yellow-500" },
-          { label: "Année", value: yearWeight, set: setYearWeight, color: "accent-purple-500" },
+          { label: "BPM", value: bpmWeight, set: setBpmWeight },
+          { label: "Tonalité", value: keyWeight, set: setKeyWeight },
+          { label: "Énergie", value: energyWeight, set: setEnergyWeight },
+          { label: "Danceability", value: danceWeight, set: setDanceWeight },
+          { label: "Année", value: yearWeight, set: setYearWeight },
         ].map((s) => (
           <div key={s.label} className="flex items-center gap-3">
-            <span className="w-24 text-xs text-spotify-light">{s.label}</span>
+            <span className="w-24 text-xs text-sand-300">{s.label}</span>
             <input
               type="range"
               min={0}
               max={100}
               value={s.value}
               onChange={(e) => s.set(Number(e.target.value))}
-              className={`h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-spotify-gray ${s.color}`}
+              className="flex-1"
             />
-            <span className="w-8 text-right text-xs tabular-nums text-spotify-light">
+            <span className="w-8 text-right font-mono text-xs tabular-nums text-sand-400">
               {totalWeight > 0 ? Math.round((s.value / totalWeight) * 100) : 0}%
             </span>
           </div>
         ))}
       </div>
 
-      {/* Beam width */}
       <div className="mb-5">
         <div className="flex items-center gap-3">
-          <span className="w-24 text-xs text-spotify-light">Profondeur</span>
+          <span className="w-24 text-xs text-sand-300">Profondeur</span>
           <input
             type="range"
             min={1}
             max={10}
             value={beamWidth}
             onChange={(e) => setBeamWidth(Number(e.target.value))}
-            className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-spotify-gray accent-spotify-green"
+            className="flex-1"
           />
-          <span className="w-8 text-right text-xs tabular-nums text-spotify-light">
+          <span className="w-8 text-right font-mono text-xs tabular-nums text-sand-400">
             {beamWidth}
           </span>
         </div>
-        <p className="mt-1 text-[10px] text-spotify-light/50">
+        <p className="mt-1 text-[10px] text-sand-400">
           Plus élevé = meilleur résultat mais plus lent
         </p>
       </div>
@@ -133,7 +130,7 @@ export default function SetGeneratorPanel({ onGenerate, isLoading }: SetGenerato
       <button
         onClick={handleGenerate}
         disabled={isLoading}
-        className="flex w-full items-center justify-center gap-2 rounded-full bg-spotify-green px-6 py-2.5 font-semibold text-black transition-transform hover:scale-[1.02] hover:brightness-110 disabled:opacity-50 disabled:hover:scale-100"
+        className="flex w-full items-center justify-center gap-2 rounded-full bg-amber px-6 py-2.5 font-display font-semibold text-deck-bg transition-all hover:bg-amber-light hover:shadow-lg hover:shadow-amber/20 active:scale-[0.98] disabled:opacity-50 disabled:hover:scale-100"
       >
         {isLoading ? (
           <>

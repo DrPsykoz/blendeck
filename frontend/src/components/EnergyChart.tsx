@@ -33,9 +33,20 @@ export default function EnergyChart({ tracks, transitions }: EnergyChartProps) {
     };
   });
 
+  const tooltipStyle = {
+    backgroundColor: "#111114",
+    border: "1px solid #242429",
+    borderRadius: "10px",
+    fontSize: 12,
+    color: "#EDEAE5",
+  };
+
+  const tickStyle = { fill: "#5E5B65", fontSize: 11 };
+  const gridColor = "#1A1A1E";
+
   return (
-    <div className="rounded-xl border border-spotify-gray bg-spotify-gray/30 p-4">
-      <h3 className="mb-4 text-sm font-semibold text-spotify-light">
+    <div className="rounded-xl border border-deck-border bg-deck-card p-4">
+      <h3 className="mb-4 font-display text-sm font-semibold text-sand-300">
         Courbe d&apos;énergie &amp; BPM
       </h3>
 
@@ -44,20 +55,15 @@ export default function EnergyChart({ tracks, transitions }: EnergyChartProps) {
           <AreaChart data={data} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
             <defs>
               <linearGradient id="energyGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#1DB954" stopOpacity={0.4} />
-                <stop offset="95%" stopColor="#1DB954" stopOpacity={0} />
+                <stop offset="5%" stopColor="#D4A044" stopOpacity={0.3} />
+                <stop offset="95%" stopColor="#D4A044" stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-            <XAxis dataKey="name" tick={{ fill: "#B3B3B3", fontSize: 11 }} />
-            <YAxis tick={{ fill: "#B3B3B3", fontSize: 11 }} domain={[0, 100]} />
+            <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+            <XAxis dataKey="name" tick={tickStyle} />
+            <YAxis tick={tickStyle} domain={[0, 100]} />
             <Tooltip
-              contentStyle={{
-                backgroundColor: "#282828",
-                border: "1px solid #444",
-                borderRadius: "8px",
-                fontSize: 12,
-              }}
+              contentStyle={tooltipStyle}
               labelFormatter={(label, payload) => {
                 const item = payload?.[0]?.payload;
                 return item?.trackName || `Track ${label}`;
@@ -66,7 +72,7 @@ export default function EnergyChart({ tracks, transitions }: EnergyChartProps) {
             <Area
               type="monotone"
               dataKey="energy"
-              stroke="#1DB954"
+              stroke="#D4A044"
               fill="url(#energyGrad)"
               strokeWidth={2}
               name="Énergie"
@@ -74,7 +80,7 @@ export default function EnergyChart({ tracks, transitions }: EnergyChartProps) {
             <Area
               type="monotone"
               dataKey="danceability"
-              stroke="#1E90FF"
+              stroke="#60A5FA"
               fill="transparent"
               strokeWidth={1.5}
               strokeDasharray="4 4"
@@ -84,55 +90,39 @@ export default function EnergyChart({ tracks, transitions }: EnergyChartProps) {
         </ResponsiveContainer>
       </div>
 
-      {/* BPM line below */}
       <div className="mt-2 h-24">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-            <XAxis dataKey="name" tick={{ fill: "#B3B3B3", fontSize: 11 }} />
-            <YAxis tick={{ fill: "#B3B3B3", fontSize: 11 }} />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: "#282828",
-                border: "1px solid #444",
-                borderRadius: "8px",
-                fontSize: 12,
-              }}
-            />
+            <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+            <XAxis dataKey="name" tick={tickStyle} />
+            <YAxis tick={tickStyle} />
+            <Tooltip contentStyle={tooltipStyle} />
             <Line
               type="monotone"
               dataKey="bpm"
-              stroke="#FF6B6B"
+              stroke="#F87171"
               strokeWidth={2}
-              dot={{ r: 2 }}
+              dot={{ r: 2, fill: "#F87171" }}
               name="BPM"
             />
           </LineChart>
         </ResponsiveContainer>
       </div>
 
-      {/* Transition scores */}
       {transitions && transitions.length > 0 && (
         <div className="mt-2 h-20">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={data} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-              <XAxis dataKey="name" tick={{ fill: "#B3B3B3", fontSize: 11 }} />
-              <YAxis tick={{ fill: "#B3B3B3", fontSize: 11 }} domain={[0, 100]} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "#282828",
-                  border: "1px solid #444",
-                  borderRadius: "8px",
-                  fontSize: 12,
-                }}
-              />
+              <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+              <XAxis dataKey="name" tick={tickStyle} />
+              <YAxis tick={tickStyle} domain={[0, 100]} />
+              <Tooltip contentStyle={tooltipStyle} />
               <Line
                 type="monotone"
                 dataKey="transitionScore"
-                stroke="#FFA500"
+                stroke="#34D399"
                 strokeWidth={2}
-                dot={{ r: 2 }}
+                dot={{ r: 2, fill: "#34D399" }}
                 name="Transition %"
                 connectNulls
               />

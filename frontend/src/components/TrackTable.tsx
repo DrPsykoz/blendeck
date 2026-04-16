@@ -36,16 +36,16 @@ function formatDuration(ms: number): string {
 
 function getCamelotColor(letter: string): string {
   return letter === "B"
-    ? "bg-blue-500/20 text-blue-300 border-blue-500/30"
-    : "bg-purple-500/20 text-purple-300 border-purple-500/30";
+    ? "bg-blue-500/10 text-blue-300 border-blue-500/20"
+    : "bg-violet-500/10 text-violet-300 border-violet-500/20";
 }
 
 function getEnergyBarColor(energy: number): string {
-  if (energy >= 0.8) return "bg-red-500";
-  if (energy >= 0.6) return "bg-orange-500";
-  if (energy >= 0.4) return "bg-yellow-500";
-  if (energy >= 0.2) return "bg-green-500";
-  return "bg-blue-500";
+  if (energy >= 0.8) return "bg-red-400";
+  if (energy >= 0.6) return "bg-amber";
+  if (energy >= 0.4) return "bg-amber-light";
+  if (energy >= 0.2) return "bg-emerald-400";
+  return "bg-blue-400";
 }
 
 function SortableRow({
@@ -94,23 +94,23 @@ function SortableRow({
       <tr
         ref={setNodeRef}
         style={style}
-        className={`group border-b border-spotify-gray/30 transition-colors ${
-          isSpotifyPlaying ? "bg-spotify-green/10" : isPlaying ? "bg-spotify-green/5" : "hover:bg-spotify-gray/30"
+        className={`group border-b border-deck-border/30 transition-colors ${
+          isSpotifyPlaying ? "bg-amber/5" : isPlaying ? "bg-amber/[0.03]" : "hover:bg-deck-surface/50"
         }`}
       >
         <td className="w-8 px-2 py-2">
-          <button {...attributes} {...listeners} className="cursor-grab text-spotify-light/50 hover:text-white">
+          <button {...attributes} {...listeners} className="cursor-grab text-sand-500 hover:text-sand-200">
             <GripVertical className="h-4 w-4" />
           </button>
         </td>
-        <td className="w-8 px-2 py-2 text-sm text-spotify-light">{index + 1}</td>
+        <td className="w-8 px-2 py-2 font-mono text-sm text-sand-400">{index + 1}</td>
         <td className="px-2 py-2">
           <div className="flex items-center gap-3">
             {/* Album art with play overlay */}
             <button
               onClick={() => !isLoading && onTogglePlay(track)}
               disabled={isLoading}
-              className="relative h-10 w-10 flex-shrink-0 overflow-hidden rounded bg-spotify-gray cursor-pointer group/play"
+              className="relative h-10 w-10 flex-shrink-0 overflow-hidden rounded-lg bg-deck-surface cursor-pointer group/play"
               title={isLoading ? "Chargement..." : (isPlaying ? "Pause" : "Écouter l'extrait")}
             >
               {track.album_image_url ? (
@@ -122,10 +122,10 @@ function SortableRow({
                   sizes="40px"
                 />
               ) : (
-                <div className="flex h-full items-center justify-center text-xs text-spotify-light/30">♫</div>
+                <div className="flex h-full items-center justify-center text-xs text-sand-500">♫</div>
               )}
               {/* Play/Pause/Loading overlay */}
-              <div className={`absolute inset-0 flex items-center justify-center bg-black/50 transition-opacity ${
+              <div className={`absolute inset-0 flex items-center justify-center bg-black/40 transition-opacity ${
                 isPlaying || isLoading ? "opacity-100" : "opacity-0 group-hover/play:opacity-100"
               }`}>
                 {isLoading ? (
@@ -142,7 +142,7 @@ function SortableRow({
                   <circle
                     cx="20" cy="20" r="18"
                     fill="none"
-                    stroke="rgb(30, 215, 96)"
+                    stroke="#D4A044"
                     strokeWidth="2"
                     strokeDasharray={`${playProgress * 113} 113`}
                     className="transition-all duration-300"
@@ -152,43 +152,43 @@ function SortableRow({
             </button>
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
-                <p className={`truncate text-sm font-medium ${isPlaying ? "text-spotify-green" : ""}`}>
+                <p className={`truncate text-sm font-medium ${isPlaying ? "text-amber" : "text-sand-50"}`}>
                   {track.name}
                 </p>
                 {isPlaying && (
-                  <Volume2 className="h-3 w-3 flex-shrink-0 animate-pulse text-spotify-green" />
+                  <Volume2 className="h-3 w-3 flex-shrink-0 animate-pulse text-amber" />
                 )}
               </div>
-              <p className="truncate text-xs text-spotify-light">
+              <p className="truncate text-xs text-sand-400">
                 {track.artists.join(", ")}
               </p>
             </div>
           </div>
         </td>
-        <td className="px-2 py-2 text-center text-sm tabular-nums">
+        <td className="px-2 py-2 text-center font-mono text-sm tabular-nums text-sand-200">
           {af ? Math.round(af.tempo) : "—"}
         </td>
         <td className="px-2 py-2 text-center">
           {track.camelot ? (
             <span
-              className={`inline-block rounded border px-2 py-0.5 text-xs font-mono font-semibold ${getCamelotColor(track.camelot.letter)}`}
+              className={`inline-block rounded-md border px-2 py-0.5 font-mono text-xs font-semibold ${getCamelotColor(track.camelot.letter)}`}
             >
               {track.camelot.number}{track.camelot.letter}
             </span>
           ) : (
-            <span className="text-xs text-spotify-light/50">—</span>
+            <span className="text-xs text-sand-500">—</span>
           )}
         </td>
         <td className="px-2 py-2">
           {af ? (
             <div className="flex items-center gap-2">
-              <div className="h-2 w-16 rounded-full bg-spotify-gray">
+              <div className="h-1.5 w-16 rounded-full bg-deck-surface">
                 <div
-                  className={`h-2 rounded-full ${getEnergyBarColor(af.energy)}`}
+                  className={`h-1.5 rounded-full ${getEnergyBarColor(af.energy)}`}
                   style={{ width: `${af.energy * 100}%` }}
                 />
               </div>
-              <span className="text-xs tabular-nums text-spotify-light">
+              <span className="font-mono text-xs tabular-nums text-sand-300">
                 {(af.energy * 100).toFixed(0)}
               </span>
             </div>
@@ -196,13 +196,13 @@ function SortableRow({
             "—"
           )}
         </td>
-        <td className="px-2 py-2 text-center text-xs tabular-nums text-spotify-light">
+        <td className="px-2 py-2 text-center font-mono text-xs tabular-nums text-sand-300">
           {af ? (af.danceability * 100).toFixed(0) : "—"}
         </td>
-        <td className="px-2 py-2 text-center text-xs tabular-nums text-spotify-light">
+        <td className="px-2 py-2 text-center font-mono text-xs tabular-nums text-sand-400">
           {track.release_year ?? "—"}
         </td>
-        <td className="px-2 py-2 text-right text-xs tabular-nums text-spotify-light">
+        <td className="px-2 py-2 text-right font-mono text-xs tabular-nums text-sand-400">
           {formatDuration(track.duration_ms)}
         </td>
         <td className="px-2 py-2 text-center">
@@ -211,8 +211,8 @@ function SortableRow({
               onClick={() => onPlaySpotify(track.uri)}
               className={`rounded-full p-1.5 transition-colors ${
                 isSpotifyPlaying
-                  ? "text-spotify-green bg-spotify-green/10"
-                  : "text-spotify-light/50 hover:text-spotify-green hover:bg-spotify-green/10"
+                  ? "text-amber bg-amber/10"
+                  : "text-sand-500 hover:text-amber hover:bg-amber/10"
               }`}
               title="Jouer sur Spotify"
             >
@@ -341,23 +341,23 @@ export default function TrackTable({ tracks, transitions, onReorder, currentSpot
   }
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-spotify-gray bg-spotify-gray/20">
+    <div className="overflow-x-auto rounded-xl border border-deck-border bg-deck-card">
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={localTracks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
           <table className="w-full text-left">
             <thead>
-              <tr className="border-b border-spotify-gray text-xs uppercase tracking-wider text-spotify-light">
+              <tr className="border-b border-deck-border text-xs uppercase tracking-wider text-sand-400">
                 <th className="w-8 px-2 py-3" />
-                <th className="w-8 px-2 py-3">#</th>
+                <th className="w-8 px-2 py-3 font-mono">#</th>
                 <th className="px-2 py-3">Titre</th>
-                <th className="px-2 py-3 text-center">BPM</th>
-                <th className="px-2 py-3 text-center">Key</th>
+                <th className="px-2 py-3 text-center font-mono">BPM</th>
+                <th className="px-2 py-3 text-center font-mono">Key</th>
                 <th className="px-2 py-3">Énergie</th>
-                <th className="px-2 py-3 text-center">Dance</th>
-                <th className="px-2 py-3 text-center">Année</th>
-                <th className="px-2 py-3 text-right">Durée</th>
+                <th className="px-2 py-3 text-center font-mono">Dance</th>
+                <th className="px-2 py-3 text-center font-mono">Année</th>
+                <th className="px-2 py-3 text-right font-mono">Durée</th>
                 {onPlaySpotify && <th className="px-2 py-3 text-center w-10">
-                  <Headphones className="h-3 w-3 mx-auto" />
+                  <Headphones className="h-3 w-3 mx-auto text-sand-400" />
                 </th>}
               </tr>
             </thead>

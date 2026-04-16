@@ -208,9 +208,9 @@ export default function PlaylistPage() {
   if (authLoading) {
     return (
       <div className="flex min-h-[50vh] items-center justify-center">
-        <div className="text-center">
-          <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-spotify-green border-t-transparent" />
-          <p className="text-spotify-light">Connexion...</p>
+        <div className="text-center animate-fade-in">
+          <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-amber border-t-transparent" />
+          <p className="text-sand-300">Connexion...</p>
         </div>
       </div>
     );
@@ -218,27 +218,26 @@ export default function PlaylistPage() {
 
   if (error) {
     return (
-      <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-red-400">
+      <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-400">
         Erreur: {(error as Error).message}
       </div>
     );
   }
 
-  // Show analysis progress while loading (even before tracks are ready)
   if (isLoading) {
     return (
-      <div className="mx-auto max-w-2xl py-12">
+      <div className="mx-auto max-w-2xl py-12 animate-fade-in">
         <div className="mb-6 flex items-center gap-4">
           <button
             onClick={() => router.push("/")}
-            className="rounded-lg border border-spotify-gray p-2 transition-colors hover:border-white"
+            className="rounded-lg border border-deck-border p-2 text-sand-300 transition-colors hover:border-sand-400 hover:text-sand-50"
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
           <div>
-            <h1 className="text-2xl font-bold">Analyse de playlist</h1>
+            <h1 className="font-display text-2xl font-bold tracking-tight text-sand-50">Analyse de playlist</h1>
             {analysisTotal > 0 && (
-              <p className="text-sm text-spotify-light">{analysisTotal} morceaux détectés</p>
+              <p className="text-sm text-sand-300">{analysisTotal} morceaux détectés</p>
             )}
           </div>
         </div>
@@ -254,8 +253,8 @@ export default function PlaylistPage() {
         ) : (
           <div className="flex items-center justify-center py-12">
             <div className="text-center">
-              <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-spotify-green border-t-transparent" />
-              <p className="text-spotify-light">Chargement des morceaux...</p>
+              <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-amber border-t-transparent" />
+              <p className="text-sand-300">Chargement des morceaux...</p>
             </div>
           </div>
         )}
@@ -275,19 +274,19 @@ export default function PlaylistPage() {
   ];
 
   return (
-    <div>
+    <div className="animate-fade-in">
       {/* Header */}
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-8 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <button
             onClick={() => router.push("/")}
-            className="rounded-lg border border-spotify-gray p-2 transition-colors hover:border-white"
+            className="rounded-lg border border-deck-border p-2 text-sand-300 transition-colors hover:border-sand-400 hover:text-sand-50"
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
           <div>
-            <h1 className="text-2xl font-bold">Analyse de playlist</h1>
-            <p className="text-sm text-spotify-light">{tracks.length} morceaux chargés</p>
+            <h1 className="font-display text-2xl font-bold tracking-tight text-sand-50">Analyse de playlist</h1>
+            <p className="text-sm text-sand-300">{tracks.length} morceaux chargés</p>
           </div>
         </div>
         <ExportMenu
@@ -300,7 +299,7 @@ export default function PlaylistPage() {
 
       {/* Stats */}
       {stats && (
-        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
+        <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
           {[
             { label: "Morceaux", value: stats.count, icon: Music },
             { label: "BPM moyen", value: Math.round(stats.avgBpm), icon: Disc3 },
@@ -310,12 +309,12 @@ export default function PlaylistPage() {
           ].map((s) => (
             <div
               key={s.label}
-              className="flex items-center gap-3 rounded-lg border border-spotify-gray bg-spotify-gray/30 px-4 py-3"
+              className="flex items-center gap-3 rounded-xl border border-deck-border bg-deck-card px-4 py-3 transition-colors hover:border-deck-muted"
             >
-              <s.icon className="h-5 w-5 text-spotify-green" />
+              <s.icon className="h-5 w-5 text-amber" />
               <div>
-                <div className="text-lg font-bold">{s.value}</div>
-                <div className="text-xs text-spotify-light">{s.label}</div>
+                <div className="font-display text-lg font-bold text-sand-50">{s.value}</div>
+                <div className="text-xs text-sand-400">{s.label}</div>
               </div>
             </div>
           ))}
@@ -323,32 +322,32 @@ export default function PlaylistPage() {
       )}
 
       {/* Sort buttons */}
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <span className="mr-2 flex items-center gap-1 text-sm text-spotify-light">
-          <ArrowUpDown className="h-4 w-4" />
-          Trier par:
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <span className="mr-2 flex items-center gap-1 text-sm text-sand-400">
+          <ArrowUpDown className="h-3.5 w-3.5" />
+          Trier:
         </span>
         {sortButtons.map((btn) => (
           <button
             key={btn.key}
             onClick={() => handleSort(btn.key)}
-            className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+            className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all ${
               activeSort === btn.key
-                ? "border-spotify-green bg-spotify-green/10 text-spotify-green"
-                : "border-spotify-gray text-spotify-light hover:border-white hover:text-white"
+                ? "border-amber/40 bg-amber/10 text-amber"
+                : "border-deck-border text-sand-300 hover:border-sand-400 hover:text-sand-50"
             }`}
           >
             <btn.icon className="h-3 w-3" />
             {btn.label}
             {activeSort === btn.key && (
-              <span className="ml-0.5">{sortAsc ? "↑" : "↓"}</span>
+              <span className="ml-0.5 font-mono">{sortAsc ? "↑" : "↓"}</span>
             )}
           </button>
         ))}
         {activeSort !== "default" && (
           <button
             onClick={() => handleSort("default")}
-            className="ml-1 text-xs text-spotify-light underline hover:text-white"
+            className="ml-1 text-xs text-sand-400 underline hover:text-sand-50"
           >
             Réinitialiser
           </button>
@@ -363,16 +362,16 @@ export default function PlaylistPage() {
 
           {/* Generated set score banner */}
           {generatedSet && (
-            <div className="flex items-center justify-between rounded-lg border border-spotify-green/30 bg-spotify-green/10 px-4 py-3">
+            <div className="flex items-center justify-between rounded-xl border border-amber/20 bg-amber/5 px-4 py-3">
               <div>
-                <span className="text-sm font-semibold text-spotify-green">
+                <span className="text-sm font-semibold text-amber">
                   Set DJ généré
                 </span>
-                <span className="ml-2 text-xs text-spotify-light">
+                <span className="ml-2 text-xs text-sand-300">
                   Score global: {(generatedSet.total_score / Math.max(generatedSet.transitions.length, 1) * 100).toFixed(1)}%
                 </span>
               </div>
-              <span className="text-xs text-spotify-light">
+              <span className="text-xs text-sand-400">
                 {generatedSet.transitions.filter((t) => t.total_score >= 0.8).length}/
                 {generatedSet.transitions.length} transitions fluides
               </span>
@@ -390,7 +389,7 @@ export default function PlaylistPage() {
         </div>
 
         {/* Sidebar: Set generator */}
-        <div className="lg:sticky lg:top-4 lg:self-start">
+        <div className="lg:sticky lg:top-16 lg:self-start">
           <SetGeneratorPanel
             onGenerate={handleGenerate}
             isLoading={generateMutation.isPending}

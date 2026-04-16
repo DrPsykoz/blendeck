@@ -37,19 +37,21 @@ export default function CallbackPage() {
   if (error) {
     return (
       <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4">
-        <p className="text-red-400">{error}</p>
-        <a href="/login" className="text-spotify-green underline">
-          Réessayer
-        </a>
+        <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-6 py-4 text-center">
+          <p className="text-red-400">{error}</p>
+          <a href="/login" className="mt-3 inline-block text-sm text-amber underline hover:text-amber-light">
+            Réessayer
+          </a>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="flex min-h-[50vh] items-center justify-center">
-      <div className="text-center">
-        <div className="mb-4 h-8 w-8 animate-spin rounded-full border-2 border-spotify-green border-t-transparent mx-auto" />
-        <p className="text-spotify-light">Connexion en cours...</p>
+      <div className="text-center animate-fade-in">
+        <div className="mb-4 mx-auto h-8 w-8 animate-spin rounded-full border-2 border-amber border-t-transparent" />
+        <p className="text-sand-300">Connexion en cours...</p>
       </div>
     </div>
   );

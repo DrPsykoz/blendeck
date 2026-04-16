@@ -244,7 +244,7 @@ const SpotifyPlayer = forwardRef<SpotifyPlayerHandle, SpotifyPlayerProps>(functi
 
   if (error) {
     return (
-      <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-spotify-gray bg-spotify-black/95 backdrop-blur-sm px-6 py-3">
+      <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-deck-border bg-deck-bg/95 backdrop-blur-sm px-6 py-3">
         <div className="mx-auto max-w-7xl text-center text-sm text-yellow-400">
           {error}
         </div>
@@ -254,8 +254,8 @@ const SpotifyPlayer = forwardRef<SpotifyPlayerHandle, SpotifyPlayerProps>(functi
 
   if (!isReady) {
     return (
-      <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-spotify-gray bg-spotify-black/95 backdrop-blur-sm px-6 py-3">
-        <div className="mx-auto max-w-7xl flex items-center justify-center gap-2 text-sm text-gray-400">
+      <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-deck-border bg-deck-bg/95 backdrop-blur-sm px-6 py-3">
+        <div className="mx-auto max-w-7xl flex items-center justify-center gap-2 text-sm text-sand-400">
           <Disc3 className="h-4 w-4 animate-spin" />
           Connexion au lecteur Spotify...
         </div>
@@ -271,7 +271,7 @@ const SpotifyPlayer = forwardRef<SpotifyPlayerHandle, SpotifyPlayerProps>(functi
   const progress = duration > 0 ? (position / duration) * 100 : 0;
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-spotify-gray bg-spotify-black/95 backdrop-blur-sm">
+    <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-deck-border bg-deck-bg/95 backdrop-blur-sm">
       <div className="mx-auto max-w-7xl px-4 py-2">
         <div className="flex items-center gap-4">
           {/* Track info */}
@@ -283,13 +283,13 @@ const SpotifyPlayer = forwardRef<SpotifyPlayerHandle, SpotifyPlayerProps>(functi
                 className="h-12 w-12 rounded shadow-lg flex-shrink-0"
               />
             ) : (
-              <div className="h-12 w-12 rounded bg-spotify-gray flex items-center justify-center flex-shrink-0">
-                <Disc3 className="h-5 w-5 text-gray-500" />
+              <div className="h-12 w-12 rounded bg-deck-surface flex items-center justify-center flex-shrink-0">
+                <Disc3 className="h-5 w-5 text-sand-500" />
               </div>
             )}
             <div className="min-w-0">
-              <div className="text-sm font-medium truncate">{trackName}</div>
-              <div className="text-xs text-gray-400 truncate">{artistName}</div>
+              <div className="text-sm font-medium text-sand-50 truncate">{trackName}</div>
+              <div className="text-xs text-sand-400 truncate">{artistName}</div>
             </div>
           </div>
 
@@ -298,13 +298,13 @@ const SpotifyPlayer = forwardRef<SpotifyPlayerHandle, SpotifyPlayerProps>(functi
             <div className="flex items-center gap-4 mb-1">
               <button
                 onClick={() => playerRef.current?.previousTrack()}
-                className="text-gray-400 hover:text-white transition"
+                className="text-sand-400 hover:text-sand-50 transition"
               >
                 <SkipBack className="h-4 w-4" fill="currentColor" />
               </button>
               <button
                 onClick={togglePlay}
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black hover:scale-105 transition"
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-sand-50 text-deck-bg hover:scale-105 transition"
               >
                 {isPlaying ? (
                   <Pause className="h-4 w-4" fill="currentColor" />
@@ -314,7 +314,7 @@ const SpotifyPlayer = forwardRef<SpotifyPlayerHandle, SpotifyPlayerProps>(functi
               </button>
               <button
                 onClick={() => playerRef.current?.nextTrack()}
-                className="text-gray-400 hover:text-white transition"
+                className="text-sand-400 hover:text-sand-50 transition"
               >
                 <SkipForward className="h-4 w-4" fill="currentColor" />
               </button>
@@ -322,21 +322,21 @@ const SpotifyPlayer = forwardRef<SpotifyPlayerHandle, SpotifyPlayerProps>(functi
 
             {/* Progress bar */}
             <div className="flex w-full items-center gap-2 max-w-xl">
-              <span className="text-[10px] text-gray-400 w-8 text-right tabular-nums">
+              <span className="text-[10px] text-sand-400 w-8 text-right tabular-nums">
                 {formatTime(position)}
               </span>
               <div
-                className="flex-1 h-1 bg-gray-700 rounded-full cursor-pointer group relative"
+                className="flex-1 h-1 bg-deck-surface rounded-full cursor-pointer group relative"
                 onClick={handleSeek}
               >
                 <div
-                  className="h-full bg-white group-hover:bg-spotify-green rounded-full transition-colors relative"
+                  className="h-full bg-sand-50 group-hover:bg-amber rounded-full transition-colors relative"
                   style={{ width: `${Math.min(progress, 100)}%` }}
                 >
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 h-3 w-3 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 transition" />
+                  <div className="absolute right-0 top-1/2 -translate-y-1/2 h-3 w-3 bg-sand-50 rounded-full shadow opacity-0 group-hover:opacity-100 transition" />
                 </div>
               </div>
-              <span className="text-[10px] text-gray-400 w-8 tabular-nums">
+              <span className="text-[10px] text-sand-400 w-8 tabular-nums">
                 {formatTime(duration)}
               </span>
             </div>
@@ -344,7 +344,7 @@ const SpotifyPlayer = forwardRef<SpotifyPlayerHandle, SpotifyPlayerProps>(functi
 
           {/* Volume */}
           <div className="flex items-center gap-2 w-1/6 justify-end">
-            <button onClick={toggleMute} className="text-gray-400 hover:text-white transition">
+            <button onClick={toggleMute} className="text-sand-400 hover:text-sand-50 transition">
               {isMuted || volume === 0 ? (
                 <VolumeX className="h-4 w-4" />
               ) : (
@@ -358,8 +358,8 @@ const SpotifyPlayer = forwardRef<SpotifyPlayerHandle, SpotifyPlayerProps>(functi
               step={0.01}
               value={volume}
               onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-              className="w-20 h-1 accent-white bg-gray-700 rounded-full appearance-none cursor-pointer
-                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+              className="w-20 h-1 accent-sand-50 bg-deck-surface rounded-full appearance-none cursor-pointer
+                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sand-50"
             />
           </div>
         </div>

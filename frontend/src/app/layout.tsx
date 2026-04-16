@@ -1,6 +1,25 @@
 import type { Metadata } from "next";
+import { Outfit, Manrope, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import Providers from "./providers";
+
+const outfit = Outfit({
+  subsets: ["latin"],
+  variable: "--font-outfit",
+  display: "swap",
+});
+
+const manrope = Manrope({
+  subsets: ["latin"],
+  variable: "--font-manrope",
+  display: "swap",
+});
+
+const jetbrains = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Blendeck",
@@ -13,14 +32,18 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="fr">
-      <body className="min-h-screen bg-spotify-dark text-white antialiased">
+    <html lang="fr" className={`${outfit.variable} ${manrope.variable} ${jetbrains.variable}`}>
+      <body className="min-h-screen bg-deck-bg font-sans text-sand-50 antialiased">
         <Providers>
-          <nav className="border-b border-spotify-gray bg-spotify-black px-6 py-4">
-            <div className="mx-auto flex max-w-7xl items-center justify-between">
-              <a href="/" className="flex items-center gap-2 text-xl font-bold">
-                <span className="text-spotify-green">♫</span>
-                <span>DJ Sorter</span>
+          <nav className="sticky top-0 z-40 border-b border-deck-border/50 bg-deck-bg/80 backdrop-blur-xl">
+            <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3">
+              <a href="/" className="group flex items-center gap-2.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber/10 transition-colors group-hover:bg-amber/20">
+                  <span className="text-lg text-amber">♫</span>
+                </div>
+                <span className="font-display text-lg font-bold tracking-tight text-sand-50">
+                  Blendeck
+                </span>
               </a>
             </div>
           </nav>
