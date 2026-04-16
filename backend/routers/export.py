@@ -2,6 +2,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse, FileResponse
@@ -34,18 +35,23 @@ async def export_new_playlist(req: ExportNewPlaylistRequest, authorization: str 
     return {"playlist_id": playlist_id, "status": "created"}
 
 
+_SPOTIFY_ID_RE = re.compile(r'^[a-zA-Z0-9]{1,32}$')
+
+
 @router.put("/reorder")
 async def export_reorder(req: ExportReorderRequest, authorization: str = Header()):
     """Reorder an existing playlist by replacing all tracks."""
     token = _extract_token(authorization)
+    if not _SPOTIFY_ID_RE.match(req.playlist_id):
+        raise HTTPException(status_code=400, detail="Invalid playlist ID")
     await replace_playlist_tracks(token, req.playlist_id, req.track_uris)
     return {"status": "reordered"}
 
 
 @router.post("/file")
 async def export_file(req: ExportFileRequest, authorization: str = Header()):
-    _extract_token(authorization)
     """Export tracks as CSV or JSON file."""
+    _extract_token(authorization)
     if req.format == "json":
         data = []
         for i, track in enumerate(req.tracks):
@@ -134,11 +140,11 @@ def _mix_sse(event_type: str, data: dict) -> str:
 
 @router.post("/mix")
 async def export_mix(req: MixRequest, authorization: str = Header()):
-    _extract_token(authorization)
     """Generate a DJ mix MP3 by downloading tracks from YouTube and concatenating with crossfade.
 
     Returns SSE stream with progress events, ending with a mix_id for download.
     """
+    _extract_token(authorization)
     cleanup_old_mixes()
 
     track_dicts = [{"id": t.id, "name": t.name, "artist": t.artist, "duration_ms": t.duration_ms} for t in req.tracks]
@@ -156,12 +162,13 @@ async def export_mix(req: MixRequest, authorization: str = Header()):
     async def event_stream():
         progress_events: list[str] = []
 
-        acquired = _mix_semaphore.locked() and _mix_semaphore._value == 0
-        if acquired:
+        try:
+            await asyncio.wait_for(_mix_semaphore.acquire(), timeout=0.1)
+        except asyncio.TimeoutError:
             yield _mix_sse("error", {"message": "Trop de mix en cours, réessayez dans quelques minutes"})
             return
 
-        async with _mix_semaphore:
+        try:
             async def on_progress(status: str, current: int, total: int, detail: str):
                 progress_events.append(_mix_sse("progress", {
                     "status": status,
@@ -193,6 +200,8 @@ async def export_mix(req: MixRequest, authorization: str = Header()):
                 yield _mix_sse("complete", {"mix_id": mix_id})
             else:
                 yield _mix_sse("error", {"message": "Échec de la génération du mix"})
+        finally:
+            _mix_semaphore.release()
 
     return StreamingResponse(
         event_stream(),
@@ -205,11 +214,14 @@ async def export_mix(req: MixRequest, authorization: str = Header()):
     )
 
 
+_MIX_ID_RE = re.compile(r'^[a-zA-Z0-9]{1,20}$')
+
+
 @router.get("/mix/{mix_id}")
-async def download_mix(mix_id: str):
+async def download_mix(mix_id: str, authorization: str = Header()):
     """Download a generated mix MP3."""
-    # Sanitize mix_id to prevent path traversal
-    if not mix_id.isalnum() or len(mix_id) > 20:
+    _extract_token(authorization)
+    if not _MIX_ID_RE.match(mix_id):
         raise HTTPException(status_code=400, detail="Invalid mix ID")
 
     path = get_mix_path(mix_id)
@@ -225,9 +237,10 @@ async def download_mix(mix_id: str):
 
 
 @router.get("/mix/{mix_id}/stream")
-async def stream_mix(mix_id: str):
+async def stream_mix(mix_id: str, authorization: str = Header()):
     """Stream a generated mix MP3 for in-app playback."""
-    if not mix_id.isalnum() or len(mix_id) > 20:
+    _extract_token(authorization)
+    if not _MIX_ID_RE.match(mix_id):
         raise HTTPException(status_code=400, detail="Invalid mix ID")
 
     path = get_mix_path(mix_id)
@@ -246,6 +259,6 @@ async def stream_mix(mix_id: str):
 
 @router.get("/mix-history")
 async def mix_history(playlist_id: str = Query(""), authorization: str = Header()):
-    _extract_token(authorization)
     """Return the last 5 generated mixes metadata for a playlist."""
+    _extract_token(authorization)
     return get_mix_history(playlist_id)

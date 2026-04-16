@@ -3,7 +3,6 @@ import re
 from fastapi import APIRouter, Header, HTTPException
 
 from models.track import (
-    SortRequest,
     GenerateSetRequest,
     GeneratedSet,
     Track,
@@ -20,22 +19,6 @@ def _extract_token(authorization: str | None) -> str:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid token")
     return authorization.removeprefix("Bearer ").strip()
-
-
-@router.post("/sort", response_model=list[Track])
-async def sort_tracks(req: SortRequest, authorization: str = Header()):
-    """Sort tracks by a single criterion."""
-    token = _extract_token(authorization)
-
-    # We need full track data — fetch from a temporary in-memory lookup
-    # The frontend sends track_ids after having already loaded the playlist
-    # For sorting, the frontend should send the full playlist_id instead
-    # But let's support both: if we have a playlist context, re-fetch
-    # For now, we return a sorted list based on what we have cached
-    raise HTTPException(
-        status_code=400,
-        detail="Use /api/playlists/{id}/tracks and sort client-side, or use /api/sort-playlist/{playlist_id}",
-    )
 
 
 @router.post("/sort-playlist/{playlist_id}", response_model=list[Track])
