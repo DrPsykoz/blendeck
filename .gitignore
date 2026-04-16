@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.local
+venv/
+.venv/
+
+# Node
+node_modules/
+.next/
+out/
+
+# Cache & build artifacts
+backend/cache/
+*.mp3
+*.wav
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+audio-cache/

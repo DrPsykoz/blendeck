@@ -1,0 +1,13 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+spotipy==2.24.0
+httpx==0.28.1
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+eval-type-backport==0.3.1
+librosa==0.10.2
+numpy>=1.23
+soundfile>=0.12
+yt-dlp>=2024.1
+ytmusicapi>=1.7
