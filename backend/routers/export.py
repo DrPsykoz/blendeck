@@ -11,8 +11,12 @@ from models.track import ExportNewPlaylistRequest, ExportReorderRequest, ExportF
 from services.spotify import create_playlist, add_tracks_to_playlist, replace_playlist_tracks
 from services import features_cache
 from services.mix_generator import generate_mix, get_mix_path, cleanup_old_mixes, get_mix_history
+import asyncio
 
 router = APIRouter(prefix="/api/export", tags=["export"])
+
+# Limit concurrent mix generations to prevent resource exhaustion
+_mix_semaphore = asyncio.Semaphore(2)
 
 
 def _extract_token(authorization: str | None) -> str:
@@ -39,7 +43,8 @@ async def export_reorder(req: ExportReorderRequest, authorization: str = Header(
 
 
 @router.post("/file")
-async def export_file(req: ExportFileRequest):
+async def export_file(req: ExportFileRequest, authorization: str = Header()):
+    _extract_token(authorization)
     """Export tracks as CSV or JSON file."""
     if req.format == "json":
         data = []
@@ -128,7 +133,8 @@ def _mix_sse(event_type: str, data: dict) -> str:
 
 
 @router.post("/mix")
-async def export_mix(req: MixRequest):
+async def export_mix(req: MixRequest, authorization: str = Header()):
+    _extract_token(authorization)
     """Generate a DJ mix MP3 by downloading tracks from YouTube and concatenating with crossfade.
 
     Returns SSE stream with progress events, ending with a mix_id for download.
@@ -148,41 +154,45 @@ async def export_mix(req: MixRequest):
         ]
 
     async def event_stream():
-        import asyncio
-
         progress_events: list[str] = []
 
-        async def on_progress(status: str, current: int, total: int, detail: str):
-            progress_events.append(_mix_sse("progress", {
-                "status": status,
-                "current": current,
-                "total": total,
-                "detail": detail,
-            }))
+        acquired = _mix_semaphore.locked() and _mix_semaphore._value == 0
+        if acquired:
+            yield _mix_sse("error", {"message": "Trop de mix en cours, réessayez dans quelques minutes"})
+            return
 
-        task = asyncio.create_task(generate_mix(
-            track_dicts, crossfade_s, on_progress, target_dur,
-            transition_style=trans_style, transitions_override=trans_overrides,
-            playlist_id=req.playlist_id,
-        ))
+        async with _mix_semaphore:
+            async def on_progress(status: str, current: int, total: int, detail: str):
+                progress_events.append(_mix_sse("progress", {
+                    "status": status,
+                    "current": current,
+                    "total": total,
+                    "detail": detail,
+                }))
 
-        yield _mix_sse("start", {"total": len(track_dicts), "crossfade": crossfade_s})
+            task = asyncio.create_task(generate_mix(
+                track_dicts, crossfade_s, on_progress, target_dur,
+                transition_style=trans_style, transitions_override=trans_overrides,
+                playlist_id=req.playlist_id,
+            ))
 
-        while not task.done():
-            await asyncio.sleep(0.5)
+            yield _mix_sse("start", {"total": len(track_dicts), "crossfade": crossfade_s})
+
+            while not task.done():
+                await asyncio.sleep(0.5)
+                while progress_events:
+                    yield progress_events.pop(0)
+
+            # Drain remaining
             while progress_events:
                 yield progress_events.pop(0)
 
-        # Drain remaining
-        while progress_events:
-            yield progress_events.pop(0)
+            mix_id = await task
 
-        mix_id = await task
-
-        if mix_id:
-            yield _mix_sse("complete", {"mix_id": mix_id})
-        else:
-            yield _mix_sse("error", {"message": "Échec de la génération du mix"})
+            if mix_id:
+                yield _mix_sse("complete", {"mix_id": mix_id})
+            else:
+                yield _mix_sse("error", {"message": "Échec de la génération du mix"})
 
     return StreamingResponse(
         event_stream(),
@@ -235,6 +245,7 @@ async def stream_mix(mix_id: str):
 
 
 @router.get("/mix-history")
-async def mix_history(playlist_id: str = Query("")):
+async def mix_history(playlist_id: str = Query(""), authorization: str = Header()):
+    _extract_token(authorization)
     """Return the last 5 generated mixes metadata for a playlist."""
     return get_mix_history(playlist_id)

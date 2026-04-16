@@ -12,8 +12,24 @@ from services.spotify import (
 )
 from services import deezer, features_cache, youtube
 from models.track import PlaylistSummary, Track
+import re
 
 router = APIRouter(prefix="/api/playlists", tags=["playlists"])
+
+_SPOTIFY_ID_RE = re.compile(r'^[a-zA-Z0-9]{1,32}$')
+_ALLOWED_PREVIEW_DOMAINS = {'cdns-preview-', 'cdn-preview-', '.deezer.com', '.dzcdn.net'}
+
+
+def _validate_track_id(track_id: str) -> None:
+    if not _SPOTIFY_ID_RE.match(track_id):
+        raise HTTPException(status_code=400, detail="Invalid track ID")
+
+
+def _is_safe_preview_url(url: str) -> bool:
+    """Check that a preview URL points to an allowed domain."""
+    if not url or not url.startswith('https://'):
+        return False
+    return any(domain in url for domain in _ALLOWED_PREVIEW_DOMAINS)
 
 
 def _extract_token(authorization: str | None) -> str:
@@ -28,14 +44,21 @@ async def list_playlists(authorization: str = Header()):
     return await get_user_playlists(token)
 
 
+def _validate_playlist_id(playlist_id: str) -> None:
+    if not _SPOTIFY_ID_RE.match(playlist_id):
+        raise HTTPException(status_code=400, detail="Invalid playlist ID")
+
+
 @router.get("/{playlist_id}/tracks", response_model=list[Track])
 async def playlist_tracks(playlist_id: str, authorization: str = Header()):
+    _validate_playlist_id(playlist_id)
     token = _extract_token(authorization)
     return await get_playlist_tracks(token, playlist_id)
 
 
 @router.get("/{playlist_id}/analyze")
 async def analyze_playlist_sse(playlist_id: str, authorization: str = Header()):
+    _validate_playlist_id(playlist_id)
     """Stream analysis progress via Server-Sent Events.
 
     Events:
@@ -110,7 +133,9 @@ async def analyze_playlist_sse(playlist_id: str, authorization: str = Header()):
             )
 
         except Exception as e:
-            yield _sse("error", {"message": str(e)})
+            import logging
+            logging.getLogger(__name__).exception("SSE analysis error")
+            yield _sse("error", {"message": "Une erreur interne est survenue"})
 
     return StreamingResponse(
         event_stream(),
@@ -162,6 +187,8 @@ def _track_dict(t: Track) -> dict:
 @router.get("/preview/{track_id}")
 async def get_preview_url(track_id: str, name: str = "", artist: str = ""):
     """Fetch preview URL on-demand for a single track via Deezer, with YouTube fallback."""
+    _validate_track_id(track_id)
+
     # Resolve track metadata from cache if not provided
     if not (name and artist):
         meta = features_cache.get_track_meta(track_id)
@@ -170,7 +197,7 @@ async def get_preview_url(track_id: str, name: str = "", artist: str = ""):
 
     # Check cache first - but verify URL is still valid
     cached = features_cache.get_preview_url(track_id)
-    if cached:
+    if cached and _is_safe_preview_url(cached):
         # Quick check if Deezer URL still works
         try:
             async with httpx.AsyncClient(follow_redirects=True, timeout=5.0) as client:
@@ -217,6 +244,8 @@ def _save_local_preview(track_id: str, audio_bytes: bytes) -> None:
 @router.get("/preview-stream/{track_id}")
 async def stream_preview(track_id: str, name: str = "", artist: str = ""):
     """Proxy-stream a preview. Re-fetches from Deezer/YouTube if expired."""
+    _validate_track_id(track_id)
+
     # Resolve track metadata from cache if not provided
     if not (name and artist):
         meta = features_cache.get_track_meta(track_id)
@@ -238,13 +267,13 @@ async def stream_preview(track_id: str, name: str = "", artist: str = ""):
         url = None
 
     # Try streaming from Deezer URL
-    if url:
+    if url and _is_safe_preview_url(url):
         result = await _try_stream_url(url)
         if result:
             return result
         # URL expired - try to refresh it
         fresh = await deezer.search_track(artist, name) if (artist and name) else None
-        if fresh and fresh.get("preview_url"):
+        if fresh and fresh.get("preview_url") and _is_safe_preview_url(fresh["preview_url"]):
             new_url = fresh["preview_url"]
             features_cache.set_preview_url(track_id, new_url)
             features_cache.save()

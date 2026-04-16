@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 from fastapi import APIRouter, Header, HTTPException
 
 from models.track import (
@@ -11,6 +12,8 @@ from services.set_generator import generate_set
 from services.spotify import get_playlist_tracks
 
 router = APIRouter(prefix="/api", tags=["sort"])
+
+_SPOTIFY_ID_RE = re.compile(r'^[a-zA-Z0-9]{1,32}$')
 
 
 def _extract_token(authorization: str | None) -> str:
@@ -40,6 +43,8 @@ async def sort_playlist(
     playlist_id: str, sort_by: str = "bpm", ascending: bool = True, authorization: str = Header()
 ):
     """Fetch playlist tracks and sort by a criterion."""
+    if not _SPOTIFY_ID_RE.match(playlist_id):
+        raise HTTPException(status_code=400, detail="Invalid playlist ID")
     token = _extract_token(authorization)
     tracks = await get_playlist_tracks(token, playlist_id)
 
@@ -68,6 +73,8 @@ async def generate_dj_set(
     playlist_id: str, req: GenerateSetRequest | None = None, authorization: str = Header()
 ):
     """Generate an optimized DJ set from a playlist."""
+    if not _SPOTIFY_ID_RE.match(playlist_id):
+        raise HTTPException(status_code=400, detail="Invalid playlist ID")
     token = _extract_token(authorization)
     tracks = await get_playlist_tracks(token, playlist_id)
 
