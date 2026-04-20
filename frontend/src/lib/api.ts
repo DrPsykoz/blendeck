@@ -103,15 +103,149 @@ export interface GeneratedSet {
 	energy_curve: number[];
 }
 
+export interface AuthUser {
+	id: string;
+	email: string | null;
+	display_name: string | null;
+	is_admin: boolean;
+}
+
+export interface AdminRecentFile {
+	name: string;
+	size_bytes: number;
+	size_mb: number;
+	path: string;
+}
+
+export interface AdminCacheSection {
+	exists?: boolean;
+	files: number;
+	size_bytes: number;
+	size_mb: number;
+	recent_files?: AdminRecentFile[];
+	items?: AdminRecentFile[];
+}
+
+export interface AdminCacheOverview {
+	admin_email: string;
+	cache_root: string;
+	tracks: AdminCacheSection;
+	mixes: AdminCacheSection;
+	transitions: AdminCacheSection;
+	metadata: AdminCacheSection;
+	total: {
+		size_bytes: number;
+		size_mb: number;
+	};
+}
+
+export interface AdminCacheClearResult {
+	scope: string;
+	total: {
+		freed_bytes: number;
+		freed_mb: number;
+	};
+}
+
+export interface AdminCachedTrackItem {
+	track_id: string;
+	source: "tracks" | "previews";
+	name: string | null;
+	artist: string | null;
+	file_name: string;
+	size_bytes: number;
+	size_mb: number;
+	updated_at: number;
+	stream_path: string;
+}
+
+export interface AdminCachedTracksList {
+	total_files: number;
+	returned: number;
+	items: AdminCachedTrackItem[];
+}
+
 // API functions
 export async function fetchPlaylists(): Promise<PlaylistSummary[]> {
 	return apiFetch<PlaylistSummary[]>("/api/playlists");
+}
+
+export async function fetchCurrentUser(): Promise<AuthUser> {
+	return apiFetch<AuthUser>("/api/auth/me");
 }
 
 export async function fetchPlaylistTracks(
 	playlistId: string,
 ): Promise<Track[]> {
 	return apiFetch<Track[]>(`/api/playlists/${playlistId}/tracks`);
+}
+
+export async function fetchAdminCacheOverview(): Promise<AdminCacheOverview> {
+	return apiFetch<AdminCacheOverview>("/api/admin/cache/overview");
+}
+
+export async function clearAdminCache(
+	scope: "tracks" | "mixes" | "transitions" | "metadata" | "all",
+): Promise<AdminCacheClearResult> {
+	return apiFetch<AdminCacheClearResult>(`/api/admin/cache?scope=${scope}`, {
+		method: "DELETE",
+	});
+}
+
+export async function deleteAdminTrackCache(
+	trackId: string,
+	source: "tracks" | "previews" | "auto" = "auto",
+): Promise<{
+	track_id: string;
+	source?: "tracks" | "previews" | "auto";
+	deleted: boolean;
+	freed_bytes?: number;
+	freed_mb?: number;
+	message?: string;
+}> {
+	const params = new URLSearchParams({ source });
+	return apiFetch(
+		`/api/admin/cache/tracks/${encodeURIComponent(trackId)}?${params.toString()}`,
+		{
+			method: "DELETE",
+		},
+	);
+}
+
+export async function fetchAdminCachedTracks(
+	search = "",
+	limit = 200,
+): Promise<AdminCachedTracksList> {
+	const params = new URLSearchParams({ limit: String(limit) });
+	if (search.trim()) params.set("q", search.trim());
+	return apiFetch<AdminCachedTracksList>(
+		`/api/admin/cache/tracks?${params.toString()}`,
+	);
+}
+
+export async function fetchAdminTrackAudioBlob(
+	trackId: string,
+	source: "tracks" | "previews" | "auto" = "auto",
+): Promise<Blob> {
+	const token = await getValidToken();
+	if (!token) throw new Error("Not authenticated");
+	const params = new URLSearchParams({ source });
+
+	const response = await fetch(
+		`${API_URL}/api/admin/cache/tracks/${encodeURIComponent(trackId)}/stream?${params.toString()}`,
+		{ headers: { Authorization: `Bearer ${token}` } },
+	);
+	if (!response.ok) {
+		let detail = "Unknown error";
+		try {
+			const data = await response.json();
+			detail = data.detail || detail;
+		} catch {
+			// no-op
+		}
+		throw new Error(detail || `API error: ${response.status}`);
+	}
+	return response.blob();
 }
 
 export async function fetchPreviewUrl(
@@ -483,6 +617,40 @@ export async function loadMixAudioUrl(mixId: string): Promise<string> {
 		headers: { Authorization: `Bearer ${token}` },
 	});
 	if (!res.ok) throw new Error(`Stream failed: ${res.status}`);
+	const blob = await res.blob();
+	return URL.createObjectURL(blob);
+}
+
+/** Fetch transition preview audio as a blob URL for playback (with auth). */
+export async function loadTransitionPreview(
+	fromId: string,
+	toId: string,
+	fromName: string,
+	fromArtist: string,
+	toName: string,
+	toArtist: string,
+	style: string = "crossfade",
+	duration: number = 8,
+): Promise<string> {
+	const token = await getValidToken();
+	if (!token) throw new Error("Not authenticated");
+	const params = new URLSearchParams({
+		from_id: fromId,
+		to_id: toId,
+		from_name: fromName,
+		from_artist: fromArtist,
+		to_name: toName,
+		to_artist: toArtist,
+		style,
+		duration: String(duration),
+	});
+	const res = await fetch(
+		`${API_URL}/api/export/transition-preview?${params}`,
+		{
+			headers: { Authorization: `Bearer ${token}` },
+		},
+	);
+	if (!res.ok) throw new Error(`Transition preview failed: ${res.status}`);
 	const blob = await res.blob();
 	return URL.createObjectURL(blob);
 }
