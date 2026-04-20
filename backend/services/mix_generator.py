@@ -188,6 +188,8 @@ def _has_unwanted_marker(text: str) -> bool:
     bad_markers = (
         "cover", "karaoke", "tribute", "live", "remix", "reprise", "sped up", "nightcore", "8d",
         "instrumental", "fanmade", "fan made",
+        "parodie", "parody", "version parodique",
+        "type beat",
     )
     return any(marker in txt for marker in bad_markers)
 
@@ -206,6 +208,15 @@ def _score_ytmusic_result(result: dict, artist: str, title: str, duration_ms: in
     # Penalize likely non-original versions.
     if _has_unwanted_marker(result_title):
         score -= 25.0
+
+    # Bonus for YouTube Music "Topic" auto-generated channels (= official studio versions)
+    result_channel = _normalize_text(result.get("channel") or "")
+    if "topic" in result_channel:
+        score += 8.0
+
+    # Bonus for verified artist badge
+    if result.get("isExplicit") is not None:
+        score += 1.0  # has metadata = likely official release
 
     # Strong artist matching.
     if artist_norm and result_artist_norm:
@@ -248,9 +259,9 @@ def _score_ytmusic_result(result: dict, artist: str, title: str, duration_ms: in
 def _search_ytmusic(artist: str, title: str, duration_ms: int = 0) -> str | None:
     """Search YouTube Music for the best matching video ID."""
     try:
-        results = _ytmusic.search(f"{artist} {title}", filter="songs", limit=12)
+        results = _ytmusic.search(f"{artist} {title}", filter="songs", limit=20)
         if not results:
-            results = _ytmusic.search(f"{artist} {title}", filter="videos", limit=12)
+            results = _ytmusic.search(f"{artist} {title}", filter="videos", limit=20)
         if not results:
             return None
 
