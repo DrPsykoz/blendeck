@@ -1,7 +1,9 @@
 from __future__ import annotations
+import asyncio
 import json
 import os
 import httpx
+import logging
 from pathlib import Path
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
@@ -13,13 +15,45 @@ from services.spotify import (
     analyze_tracks_with_progress,
 )
 from services import deezer, features_cache, youtube
+from services.mix_generator import prefetch_tracks_audio_cache
 from models.track import PlaylistSummary, Track
 import re
 
 router = APIRouter(prefix="/api/playlists", tags=["playlists"])
+logger = logging.getLogger(__name__)
 
 _SPOTIFY_ID_RE = re.compile(r'^[a-zA-Z0-9]{1,32}$')
 _ALLOWED_PREVIEW_DOMAINS = {'cdns-preview-', 'cdn-preview-', '.deezer.com', '.dzcdn.net'}
+_prefetch_tasks: dict[str, asyncio.Task] = {}
+
+
+def _start_prefetch_for_playlist(playlist_id: str, tracks: list[Track]) -> None:
+    """Start full-track cache prefetch in background, deduplicated per playlist."""
+    running = _prefetch_tasks.get(playlist_id)
+    if running and not running.done():
+        return
+
+    payload = [
+        {
+            "id": t.id,
+            "name": t.name,
+            "artist": t.artists[0] if t.artists else "",
+            "duration_ms": t.duration_ms,
+        }
+        for t in tracks
+    ]
+
+    async def _run() -> None:
+        try:
+            await prefetch_tracks_audio_cache(payload, playlist_id=playlist_id)
+        except Exception:
+            logger.exception("Background prefetch failed for playlist %s", playlist_id)
+        finally:
+            task = _prefetch_tasks.get(playlist_id)
+            if task and task.done():
+                _prefetch_tasks.pop(playlist_id, None)
+
+    _prefetch_tasks[playlist_id] = asyncio.create_task(_run())
 
 
 def _validate_track_id(track_id: str) -> None:
@@ -55,7 +89,9 @@ def _validate_playlist_id(playlist_id: str) -> None:
 async def playlist_tracks(playlist_id: str, authorization: str = Header()):
     _validate_playlist_id(playlist_id)
     token = _extract_token(authorization)
-    return await get_playlist_tracks(token, playlist_id)
+    tracks = await get_playlist_tracks(token, playlist_id)
+    _start_prefetch_for_playlist(playlist_id, tracks)
+    return tracks
 
 
 @router.get("/{playlist_id}/analyze")
@@ -72,11 +108,10 @@ async def analyze_playlist_sse(playlist_id: str, authorization: str = Header()):
     token = _extract_token(authorization)
 
     async def event_stream():
-        import asyncio
-
         try:
             # Step 1: Fetch basic tracks
             tracks = await get_playlist_tracks_basic(token, playlist_id)
+            _start_prefetch_for_playlist(playlist_id, tracks)
             cached_count = sum(1 for t in tracks if t.audio_features is not None)
             need_count = len(tracks) - cached_count
 
