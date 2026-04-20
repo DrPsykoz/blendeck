@@ -202,6 +202,16 @@ export async function fetchPlaylistTracks(
 	return apiFetch<Track[]>(`/api/playlists/${playlistId}/tracks`);
 }
 
+export async function fetchPlaylistCacheStatus(
+	playlistId: string,
+	trackIds: string[],
+): Promise<{ cached: Record<string, boolean>; prefetch_running: boolean }> {
+	const ids = trackIds.join(",");
+	return apiFetch(
+		`/api/playlists/${playlistId}/cache-status?track_ids=${encodeURIComponent(ids)}`,
+	);
+}
+
 export async function fetchAdminCacheOverview(): Promise<AdminCacheOverview> {
 	return apiFetch<AdminCacheOverview>("/api/admin/cache/overview");
 }

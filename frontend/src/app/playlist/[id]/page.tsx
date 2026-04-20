@@ -9,6 +9,7 @@ import {
   TransitionScore,
   GeneratedSet,
   AnalysisProgress as AnalysisProgressData,
+  fetchPlaylistCacheStatus,
 } from "@/lib/api";
 import { useRouter, useParams } from "next/navigation";
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
@@ -115,6 +116,53 @@ export default function PlaylistPage() {
       if (abortRef.current) abortRef.current();
     };
   }, [startAnalysis]);
+
+  // Poll cache status every 10s while prefetch is running or some tracks are uncached
+  useEffect(() => {
+    if (!analysisComplete || !tracks || tracks.length === 0) return;
+
+    const allCached = tracks.every((t) => t.audio_cached);
+    if (allCached) return;
+
+    const ids = tracks.map((t) => t.id);
+    let active = true;
+
+    const poll = async () => {
+      try {
+        const status = await fetchPlaylistCacheStatus(playlistId, ids);
+        if (!active) return;
+
+        const anyChanged = ids.some((id) => {
+          const wasCached = tracks.find((t) => t.id === id)?.audio_cached ?? false;
+          return status.cached[id] !== wasCached;
+        });
+
+        if (anyChanged) {
+          setTracks((prev) =>
+            prev ? prev.map((t) => ({ ...t, audio_cached: status.cached[t.id] ?? t.audio_cached })) : prev
+          );
+          setSortedTracks((prev) =>
+            prev.map((t) => ({ ...t, audio_cached: status.cached[t.id] ?? t.audio_cached }))
+          );
+        }
+
+        // Stop polling when everything is cached and prefetch is done
+        if (!status.prefetch_running && ids.every((id) => status.cached[id])) {
+          active = false;
+        } else if (active) {
+          setTimeout(poll, 10000);
+        }
+      } catch {
+        // silently ignore poll errors
+      }
+    };
+
+    const timer = setTimeout(poll, 10000);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [analysisComplete, tracks, playlistId]);
 
   const generateMutation = useMutation({
     mutationFn: (params: Parameters<typeof generateSet>[1]) =>

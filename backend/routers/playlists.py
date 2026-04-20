@@ -97,6 +97,27 @@ async def playlist_tracks(playlist_id: str, authorization: str = Header()):
     return tracks
 
 
+@router.get("/{playlist_id}/cache-status")
+async def playlist_cache_status(playlist_id: str, track_ids: str = "", authorization: str = Header()):
+    """Return audio cache status for the given track IDs (comma-separated).
+
+    Response: {"cached": {"id1": true, "id2": false, ...}, "prefetch_running": bool}
+    """
+    _validate_playlist_id(playlist_id)
+    _extract_token(authorization)
+
+    ids = [tid.strip() for tid in track_ids.split(",") if tid.strip() and _SPOTIFY_ID_RE.match(tid.strip())]
+    cached_set = get_cached_track_ids(ids)
+
+    task = _prefetch_tasks.get(playlist_id)
+    prefetch_running = task is not None and not task.done()
+
+    return {
+        "cached": {tid: (tid in cached_set) for tid in ids},
+        "prefetch_running": prefetch_running,
+    }
+
+
 @router.get("/{playlist_id}/analyze")
 async def analyze_playlist_sse(playlist_id: str, authorization: str = Header()):
     """Stream analysis progress via Server-Sent Events.
