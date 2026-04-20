@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from models.track import ExportNewPlaylistRequest, ExportReorderRequest, ExportFileRequest
 from services.spotify import create_playlist, add_tracks_to_playlist, replace_playlist_tracks
 from services import features_cache
-from services.mix_generator import generate_mix, get_mix_path, cleanup_old_mixes, get_mix_history
+from services.mix_generator import generate_mix, get_mix_path, cleanup_old_mixes, get_mix_history, generate_transition_preview
 import asyncio
 
 router = APIRouter(prefix="/api/export", tags=["export"])
@@ -262,3 +262,56 @@ async def mix_history(playlist_id: str = Query(""), authorization: str = Header(
     """Return the last 5 generated mixes metadata for a playlist."""
     _extract_token(authorization)
     return get_mix_history(playlist_id)
+
+
+_TRACK_ID_RE = re.compile(r'^[a-zA-Z0-9]{1,32}$')
+_ALLOWED_STYLES = {"crossfade", "fade", "cut", "echo", "beatmatch"}
+
+
+@router.get("/transition-preview")
+async def transition_preview(
+    from_id: str = Query(...),
+    to_id: str = Query(...),
+    from_name: str = Query(""),
+    from_artist: str = Query(""),
+    to_name: str = Query(""),
+    to_artist: str = Query(""),
+    style: str = Query("crossfade"),
+    duration: int = Query(8),
+    authorization: str = Header(),
+):
+    """Generate and stream a short crossfade preview between two tracks."""
+    _extract_token(authorization)
+
+    if not _TRACK_ID_RE.match(from_id) or not _TRACK_ID_RE.match(to_id):
+        raise HTTPException(status_code=400, detail="Invalid track ID")
+
+    style = style if style in _ALLOWED_STYLES else "crossfade"
+    duration = max(1, min(duration, 15))
+
+    try:
+        await asyncio.wait_for(_mix_semaphore.acquire(), timeout=0.1)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="Trop de générations en cours, réessayez")
+
+    try:
+        path = await generate_transition_preview(
+            from_id, to_id,
+            from_artist, from_name,
+            to_artist, to_name,
+            style, duration,
+        )
+    finally:
+        _mix_semaphore.release()
+
+    if not path:
+        raise HTTPException(status_code=500, detail="Échec de la génération de la preview")
+
+    return FileResponse(
+        path,
+        media_type="audio/mpeg",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": "inline",
+        },
+    )
