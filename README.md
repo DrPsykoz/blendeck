@@ -42,6 +42,7 @@ Analyse audio par IA · Harmonic mixing · Génération de mix MP3
 - **6 styles de transition** : crossfade, fade, cut, echo, beatmatch, auto
 - Découpe intelligente avec **détection vocale** (analyse spectrale 300–3500 Hz)
 - Progression temps réel par étape (téléchargement → découpe → analyse → mixage)
+- **Pré-chargement en arrière-plan** des morceaux lors du chargement d'une playlist (configurable)
 
 ### 📚 Historique des Mix
 
@@ -62,6 +63,21 @@ Analyse audio par IA · Harmonic mixing · Génération de mix MP3
 - Graphique d'énergie interactif (Recharts)
 - Badges de qualité de transition entre chaque piste
 - Tri rapide par BPM, tonalité, énergie, danceabilité, mood, année
+
+### 🛠️ Administration
+
+- **Panel Admin** (`/admin`) pour gérer le cache local
+- Inspection des pistes en cache (sources : tracks complets + previews)
+- Play/pause des fichiers en cache
+- Suppression individuelle par source (preview ou fichier complet)
+- Statistiques de cache global (taille, nombre de fichiers)
+- Nettoyage du cache par scope (tracks, mixes, transitions, metadata)
+
+### ⚡ Optimisations
+
+- **Cache Spotify API** (30 min TTL) pour `/v1/me` et `/v1/me/playlists`
+- Réduction drastique des appels redondants à l'API Spotify
+- **Versioning automatique** basé sur les commits git
 
 ---
 
@@ -121,6 +137,10 @@ SPOTIFY_CLIENT_ID=votre_client_id
 SPOTIFY_CLIENT_SECRET=votre_client_secret
 SPOTIFY_REDIRECT_URI=http://localhost:3000/callback
 FRONTEND_URL=http://localhost:3000
+
+# Pré-chargement en arrière-plan (optionnel)
+MIX_PREFETCH_CONCURRENCY=2        # Max concurrent downloads
+MIX_PREFETCH_MAX_TRACKS=80        # Max tracks to prefetch per playlist
 ```
 
 Éditer `frontend/.env.local` :
@@ -234,9 +254,11 @@ blendeck/
 │   ├── core/config.py             # Configuration (env vars)
 │   ├── models/track.py            # Pydantic models
 │   ├── routers/
+│   │   ├── auth.py                # Authentification OAuth Spotify
 │   │   ├── playlists.py           # Playlists, tracks, analyse SSE
 │   │   ├── sort.py                # Tri & génération de set
-│   │   └── export.py              # Export, mix SSE, download, historique
+│   │   ├── export.py              # Export, mix SSE, download, historique
+│   │   └── admin.py               # Admin panel - gestion du cache
 │   └── services/
 │       ├── audio_analyzer.py      # Analyse librosa (BPM, key, energy...)
 │       ├── camelot.py             # Camelot Wheel
@@ -251,8 +273,7 @@ blendeck/
 │   ├── Dockerfile
 │   └── src/
 │       ├── app/
-│       │   ├── page.tsx           # Liste des playlists
-│       │   ├── playlist/[id]/     # Page playlist (analyse, tri, mix)
+│       │   ├── page.tsx           # Liste des playlists       │   ├── admin/             # Panel admin de cache│       │   ├── playlist/[id]/     # Page playlist (analyse, tri, mix)
 │       │   ├── login/             # Page de connexion
 │       │   └── callback/          # OAuth callback
 │       ├── components/
@@ -274,24 +295,95 @@ blendeck/
 
 ## 🔌 API
 
-| Méthode | Endpoint                      | Description                          |
-| ------- | ----------------------------- | ------------------------------------ |
-| `GET`   | `/api/playlists`              | Liste des playlists de l'utilisateur |
-| `GET`   | `/api/playlists/{id}/tracks`  | Pistes avec features audio           |
-| `GET`   | `/api/playlists/{id}/analyze` | Analyse SSE temps réel               |
-| `POST`  | `/api/sort-playlist/{id}`     | Tri par critère                      |
-| `POST`  | `/api/generate-set/{id}`      | Génération de set DJ                 |
-| `POST`  | `/api/export/mix`             | Génération de mix SSE                |
-| `GET`   | `/api/export/mix/{id}`        | Téléchargement du mix MP3            |
-| `GET`   | `/api/export/mix/{id}/stream` | Streaming du mix (lecture en ligne)  |
-| `GET`   | `/api/export/mix-history`     | Historique des mix par playlist      |
-| `POST`  | `/api/export/new-playlist`    | Créer une nouvelle playlist          |
-| `POST`  | `/api/export/reorder`         | Réorganiser une playlist             |
-| `POST`  | `/api/export/file`            | Export CSV/JSON                      |
+| Méthode | Endpoint                           | Description                                 |
+| ------- | ---------------------------------- | ------------------------------------------- |
+| `GET`   | `/api/playlists`                   | Liste des playlists de l'utilisateur        |
+| `GET`   | `/api/playlists/{id}/tracks`       | Pistes avec features audio                  |
+| `GET`   | `/api/playlists/{id}/analyze`      | Analyse SSE temps réel                      |
+| `POST`  | `/api/sort-playlist/{id}`          | Tri par critère                             |
+| `POST`  | `/api/generate-set/{id}`           | Génération de set DJ                        |
+| `POST`  | `/api/export/mix`                  | Génération de mix SSE                       |
+| `GET`   | `/api/export/mix/{id}`             | Téléchargement du mix MP3                   |
+| `GET`   | `/api/export/mix/{id}/stream`      | Streaming du mix (lecture en ligne)         |
+| `GET`   | `/api/export/mix-history`          | Historique des mix par playlist             |
+| `GET`   | `/api/export/transition-preview`   | Preview de transition entre deux pistes     |
+| `POST`  | `/api/export/new-playlist`         | Créer une nouvelle playlist                 |
+| `POST`  | `/api/export/reorder`              | Réorganiser une playlist                    |
+| `POST`  | `/api/export/file`                 | Export CSV/JSON                             |
+| `GET`   | `/admin`                           | Panel admin de gestion du cache             |
+| `GET`   | `/api/admin/cache-overview`        | Statistiques du cache global                |
+| `GET`   | `/api/admin/cached-tracks`         | Liste des pistes en cache (sources mixtes)  |
+| `GET`   | `/api/admin/cached-track/{id}`     | Streaming d'une piste en cache              |
+| `DELETE`| `/api/admin/cached-track/{id}`     | Suppression d'une piste en cache            |
+| `POST`  | `/api/admin/clear-cache`           | Nettoyage du cache par scope                |
+| `GET`   | `/api/auth/me`                     | Profil utilisateur courant (cached 30min)   |
 
 ---
 
-## ⚠️ Avertissement légal
+## 💾 Gestion du Cache
+
+### Structure du Cache
+
+```
+/app/cache/
+├── tracks/              # Fichiers MP3 complets (mix + pistes complètes)
+├── previews/            # Previews 30s depuis YouTube Music
+├── mixes/               # Mix générés (MP3)
+├── audio_features.json  # Cache des features Spotify (BPM, key, energy...)
+├── preview_urls.json    # URLs des previews par track_id
+├── track_meta.json      # Métadonnées des pistes
+└── history.json         # Historique des mix par playlist
+```
+
+### Panel Admin
+
+Accédez au panel d'administration à **[http://localhost:3000/admin](http://localhost:3000/admin)** (rôle admin requis).
+
+**Fonctionnalités :**
+- 📊 Vue d'ensemble : taille totale, nombre de fichiers par scope
+- 🎵 Liste des pistes en cache : originales ET previews
+- ▶️ Play/pause pour tester les fichiers en cache
+- 🗑️ Suppression individuelle (source-aware)
+- 🧹 Nettoyage par scope (tracks, mixes, transitions, metadata)
+
+### Pré-chargement en Arrière-Plan
+
+Lors du chargement d'une playlist, les musiques sont pré-téléchargées en arrière-plan sans bloquer l'interface :
+
+- **Limité à 80 pistes** (configurable via `MIX_PREFETCH_MAX_TRACKS`)
+- **Concurrence max 2** téléchargements simultanés (configurable via `MIX_PREFETCH_CONCURRENCY`)
+- **TTL 30 min** pour le cache Spotify API (`/v1/me`, `/v1/me/playlists`)
+
+Variables d'environnement dans `backend/.env` :
+
+```env
+MIX_PREFETCH_CONCURRENCY=2        # Max concurrent downloads
+MIX_PREFETCH_MAX_TRACKS=80        # Max tracks to prefetch per playlist
+```
+
+---
+
+## 📦 Versioning
+
+Le projet utilise un système automatique de versioning basé sur les commits Git.
+
+```bash
+# Générer la version depuis le nombre de commits (recommandé)
+./scripts/update-version-from-git.sh
+
+# Ou faire un bump manuel (major/minor/patch)
+./scripts/bump-version.sh patch
+```
+
+La version est mise à jour dans :
+- `VERSION` (source unique)
+- `backend/main.py`
+- `frontend/package.json`
+- `frontend/package-lock.json`
+
+Voir **[VERSIONING.md](VERSIONING.md)** pour plus de détails.
+
+---
 
 Ce projet est fourni **à des fins éducatives et pour un usage personnel uniquement**. Il n'est pas monétisé et ne génère aucun revenu.
 
