@@ -43,6 +43,7 @@ class Track(BaseModel):
     release_year: int | None = None
     audio_features: AudioFeatures | None = None
     camelot: CamelotKey | None = None
+    audio_cached: bool = False
 
 
 class TransitionScore(BaseModel):

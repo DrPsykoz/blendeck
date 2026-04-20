@@ -16,7 +16,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical, Play, Pause, Volume2, Loader2, Headphones } from "lucide-react";
+import { GripVertical, Play, Pause, Volume2, Loader2, Headphones, HardDrive } from "lucide-react";
 import Image from "next/image";
 import { useRef, useState, useCallback, useEffect } from "react";
 
@@ -175,8 +175,11 @@ function SortableRow({
                 </p>
                 {isPlaying && (
                   <Volume2 className="h-3 w-3 flex-shrink-0 animate-pulse text-amber" />
-                )}
-              </div>
+                )}                {track.audio_cached && !isPlaying && (
+                  <span title="Audio complet en cache">
+                    <HardDrive className="h-3 w-3 flex-shrink-0 text-emerald-400" />
+                  </span>
+                )}              </div>
               <p className="truncate text-xs text-sand-400">
                 {track.artists.join(", ")}
               </p>

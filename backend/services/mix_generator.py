@@ -49,6 +49,11 @@ MIX_DIR.mkdir(parents=True, exist_ok=True)
 TRACK_CACHE_DIR = Path("/app/cache/tracks")
 TRACK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+
+def get_cached_track_ids(track_ids: list[str]) -> set[str]:
+    """Return the subset of track_ids whose full MP3 exists in cache."""
+    return {tid for tid in track_ids if (TRACK_CACHE_DIR / f"{tid}.mp3").exists()}
+
 TRIM_CACHE_DIR = Path("/app/cache/trimmed")
 TRIM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 

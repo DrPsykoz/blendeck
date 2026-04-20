@@ -15,7 +15,7 @@ from services.spotify import (
     analyze_tracks_with_progress,
 )
 from services import deezer, features_cache, youtube
-from services.mix_generator import prefetch_tracks_audio_cache
+from services.mix_generator import prefetch_tracks_audio_cache, get_cached_track_ids
 from models.track import PlaylistSummary, Track
 import re
 
@@ -91,6 +91,9 @@ async def playlist_tracks(playlist_id: str, authorization: str = Header()):
     token = _extract_token(authorization)
     tracks = await get_playlist_tracks(token, playlist_id)
     _start_prefetch_for_playlist(playlist_id, tracks)
+    cached = get_cached_track_ids([t.id for t in tracks])
+    for t in tracks:
+        t.audio_cached = t.id in cached
     return tracks
 
 

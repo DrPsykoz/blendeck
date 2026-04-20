@@ -83,6 +83,7 @@ export interface Track {
 	release_year: number | null;
 	audio_features: AudioFeatures | null;
 	camelot: CamelotKey | null;
+	audio_cached: boolean;
 }
 
 export interface TransitionScore {
