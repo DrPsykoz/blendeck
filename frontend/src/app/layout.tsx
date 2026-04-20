@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Outfit, Manrope, JetBrains_Mono } from "next/font/google";
+import frontendPackage from "../../package.json";
 import "./globals.css";
 import Providers from "./providers";
 
@@ -26,6 +27,8 @@ export const metadata: Metadata = {
   description: "Transform your Spotify playlists into DJ-mixed sets",
 };
 
+const appVersion = frontendPackage.version;
+
 export default function RootLayout({
   children,
 }: {
@@ -45,6 +48,9 @@ export default function RootLayout({
                   Blendeck
                 </span>
               </a>
+              <span className="rounded-full border border-deck-border bg-deck-surface/70 px-3 py-1 font-mono text-xs text-sand-300">
+                v{appVersion}
+              </span>
             </div>
           </nav>
           <main className="mx-auto max-w-7xl px-6 py-8">{children}</main>

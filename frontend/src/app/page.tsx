@@ -4,12 +4,12 @@ import { useAuth } from "@/app/providers";
 import { useQuery } from "@tanstack/react-query";
 import { fetchPlaylists, PlaylistSummary } from "@/lib/api";
 import { useRouter } from "next/navigation";
-import { LogOut, Music, ListMusic } from "lucide-react";
+import { LogOut, Music, ListMusic, Shield } from "lucide-react";
 import Image from "next/image";
 import { useEffect } from "react";
 
 export default function HomePage() {
-  const { isAuthenticated, isLoading, logout } = useAuth();
+  const { isAuthenticated, isLoading, logout, isAdmin } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
@@ -45,13 +45,24 @@ export default function HomePage() {
             Sélectionnez une playlist à analyser et trier
           </p>
         </div>
-        <button
-          onClick={logout}
-          className="flex items-center gap-2 rounded-lg border border-deck-border px-3.5 py-2 text-sm text-sand-300 transition-all hover:border-sand-400 hover:text-sand-50"
-        >
-          <LogOut className="h-3.5 w-3.5" />
-          Déconnexion
-        </button>
+        <div className="flex items-center gap-2">
+          {isAdmin && (
+            <button
+              onClick={() => router.push("/admin")}
+              className="flex items-center gap-2 rounded-lg border border-amber/40 bg-amber/10 px-3.5 py-2 text-sm text-amber transition-all hover:bg-amber/20"
+            >
+              <Shield className="h-3.5 w-3.5" />
+              Admin
+            </button>
+          )}
+          <button
+            onClick={logout}
+            className="flex items-center gap-2 rounded-lg border border-deck-border px-3.5 py-2 text-sm text-sand-300 transition-all hover:border-sand-400 hover:text-sand-50"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            Déconnexion
+          </button>
+        </div>
       </div>
 
       {playlistsLoading && (

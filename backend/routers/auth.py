@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from core.config import get_settings
+from services.spotify import get_current_user_profile
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 settings = get_settings()
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
+
+
+def _extract_token(authorization: str | None) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+    return authorization.removeprefix("Bearer ").strip()
 
 
 def _cookie_opts() -> dict:
@@ -99,3 +106,22 @@ async def logout(response: Response):
     """Clear refresh_token cookie."""
     response.delete_cookie("spotify_refresh_token", path="/")
     return {"status": "ok"}
+
+
+@router.get("/me")
+async def current_user(authorization: str = Header()):
+    """Return authenticated Spotify user profile and admin flag."""
+    token = _extract_token(authorization)
+    try:
+        user = await get_current_user_profile(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Unable to fetch user profile")
+
+    email = (user.get("email") or "").strip().lower()
+    is_admin = email == settings.admin_email.strip().lower()
+    return {
+        "id": user.get("id"),
+        "email": user.get("email"),
+        "display_name": user.get("display_name"),
+        "is_admin": is_admin,
+    }
