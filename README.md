@@ -295,28 +295,28 @@ blendeck/
 
 ## 🔌 API
 
-| Méthode | Endpoint                           | Description                                 |
-| ------- | ---------------------------------- | ------------------------------------------- |
-| `GET`   | `/api/playlists`                   | Liste des playlists de l'utilisateur        |
-| `GET`   | `/api/playlists/{id}/tracks`       | Pistes avec features audio                  |
-| `GET`   | `/api/playlists/{id}/analyze`      | Analyse SSE temps réel                      |
-| `POST`  | `/api/sort-playlist/{id}`          | Tri par critère                             |
-| `POST`  | `/api/generate-set/{id}`           | Génération de set DJ                        |
-| `POST`  | `/api/export/mix`                  | Génération de mix SSE                       |
-| `GET`   | `/api/export/mix/{id}`             | Téléchargement du mix MP3                   |
-| `GET`   | `/api/export/mix/{id}/stream`      | Streaming du mix (lecture en ligne)         |
-| `GET`   | `/api/export/mix-history`          | Historique des mix par playlist             |
-| `GET`   | `/api/export/transition-preview`   | Preview de transition entre deux pistes     |
-| `POST`  | `/api/export/new-playlist`         | Créer une nouvelle playlist                 |
-| `POST`  | `/api/export/reorder`              | Réorganiser une playlist                    |
-| `POST`  | `/api/export/file`                 | Export CSV/JSON                             |
-| `GET`   | `/admin`                           | Panel admin de gestion du cache             |
-| `GET`   | `/api/admin/cache-overview`        | Statistiques du cache global                |
-| `GET`   | `/api/admin/cached-tracks`         | Liste des pistes en cache (sources mixtes)  |
-| `GET`   | `/api/admin/cached-track/{id}`     | Streaming d'une piste en cache              |
-| `DELETE`| `/api/admin/cached-track/{id}`     | Suppression d'une piste en cache            |
-| `POST`  | `/api/admin/clear-cache`           | Nettoyage du cache par scope                |
-| `GET`   | `/api/auth/me`                     | Profil utilisateur courant (cached 30min)   |
+| Méthode  | Endpoint                         | Description                                |
+| -------- | -------------------------------- | ------------------------------------------ |
+| `GET`    | `/api/playlists`                 | Liste des playlists de l'utilisateur       |
+| `GET`    | `/api/playlists/{id}/tracks`     | Pistes avec features audio                 |
+| `GET`    | `/api/playlists/{id}/analyze`    | Analyse SSE temps réel                     |
+| `POST`   | `/api/sort-playlist/{id}`        | Tri par critère                            |
+| `POST`   | `/api/generate-set/{id}`         | Génération de set DJ                       |
+| `POST`   | `/api/export/mix`                | Génération de mix SSE                      |
+| `GET`    | `/api/export/mix/{id}`           | Téléchargement du mix MP3                  |
+| `GET`    | `/api/export/mix/{id}/stream`    | Streaming du mix (lecture en ligne)        |
+| `GET`    | `/api/export/mix-history`        | Historique des mix par playlist            |
+| `GET`    | `/api/export/transition-preview` | Preview de transition entre deux pistes    |
+| `POST`   | `/api/export/new-playlist`       | Créer une nouvelle playlist                |
+| `POST`   | `/api/export/reorder`            | Réorganiser une playlist                   |
+| `POST`   | `/api/export/file`               | Export CSV/JSON                            |
+| `GET`    | `/admin`                         | Panel admin de gestion du cache            |
+| `GET`    | `/api/admin/cache-overview`      | Statistiques du cache global               |
+| `GET`    | `/api/admin/cached-tracks`       | Liste des pistes en cache (sources mixtes) |
+| `GET`    | `/api/admin/cached-track/{id}`   | Streaming d'une piste en cache             |
+| `DELETE` | `/api/admin/cached-track/{id}`   | Suppression d'une piste en cache           |
+| `POST`   | `/api/admin/clear-cache`         | Nettoyage du cache par scope               |
+| `GET`    | `/api/auth/me`                   | Profil utilisateur courant (cached 30min)  |
 
 ---
 
@@ -340,6 +340,7 @@ blendeck/
 Accédez au panel d'administration à **[http://localhost:3000/admin](http://localhost:3000/admin)** (rôle admin requis).
 
 **Fonctionnalités :**
+
 - 📊 Vue d'ensemble : taille totale, nombre de fichiers par scope
 - 🎵 Liste des pistes en cache : originales ET previews
 - ▶️ Play/pause pour tester les fichiers en cache
@@ -376,6 +377,7 @@ Le projet utilise un système automatique de versioning basé sur les commits Gi
 ```
 
 La version est mise à jour dans :
+
 - `VERSION` (source unique)
 - `backend/main.py`
 - `frontend/package.json`
