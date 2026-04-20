@@ -512,7 +512,17 @@ async def prefetch_tracks_audio_cache(tracks: list[dict], playlist_id: str = "")
     if not tracks:
         return {"playlist_id": playlist_id, "queued": 0, "downloaded": 0, "cached": 0, "failed": 0}
 
-    picked = tracks[:_MIX_PREFETCH_MAX_TRACKS]
+    # Split into already-cached and to-download.
+    # Already-cached tracks are checked instantly (no I/O cost), so don't count
+    # towards the download limit. Only uncached tracks count against MAX_TRACKS.
+    all_ids = [str(t.get("id") or "").strip() for t in tracks]
+    already_cached = get_cached_track_ids([tid for tid in all_ids if tid])
+
+    uncached = [t for t in tracks if str(t.get("id") or "").strip() not in already_cached]
+    to_download = uncached[:_MIX_PREFETCH_MAX_TRACKS]
+    # All tracks are processed; cached ones return immediately in _prefetch_one_track
+    picked = to_download + [t for t in tracks if str(t.get("id") or "").strip() in already_cached]
+
     loop = asyncio.get_event_loop()
     sem = asyncio.Semaphore(_MIX_PREFETCH_CONCURRENCY)
 
@@ -553,7 +563,7 @@ async def prefetch_tracks_audio_cache(tracks: list[dict], playlist_id: str = "")
     logger.info(
         "Prefetch: playlist=%s queued=%d downloaded=%d cached=%d failed=%d",
         playlist_id or "-",
-        len(picked),
+        len(to_download),
         downloaded,
         cached,
         failed,
