@@ -285,6 +285,79 @@ def _search_ytmusic(artist: str, title: str, duration_ms: int = 0) -> str | None
     return None
 
 
+def search_ytmusic_candidates(artist: str, title: str, duration_ms: int = 0) -> list[dict]:
+    """Return scored YouTube Music candidates for manual selection.
+
+    Returns up to 10 results (songs then videos), each as:
+    {
+        "video_id": str,
+        "title": str,
+        "artists": str,
+        "duration_seconds": int,
+        "score": float,
+        "thumbnail_url": str | None,
+    }
+    """
+    try:
+        songs = _ytmusic.search(f"{artist} {title}", filter="songs", limit=8) or []
+        videos = _ytmusic.search(f"{artist} {title}", filter="videos", limit=6) or []
+        all_results = songs + videos
+    except Exception as e:
+        logger.warning(f"YTMusic candidate search failed for '{artist} - {title}': {e}")
+        return []
+
+    seen: set[str] = set()
+    candidates: list[dict] = []
+    for r in all_results:
+        vid_id = r.get("videoId")
+        if not vid_id or vid_id in seen:
+            continue
+        seen.add(vid_id)
+        score = _score_ytmusic_result(r, artist, title, duration_ms)
+        result_title = r.get("title") or ""
+        result_artists = ", ".join(
+            (a.get("name") or "") for a in (r.get("artists") or []) if isinstance(a, dict)
+        )
+        # Thumbnail: try thumbnails list
+        thumbnails = r.get("thumbnails") or []
+        thumbnail_url: str | None = thumbnails[-1].get("url") if thumbnails else None
+
+        candidates.append({
+            "video_id": vid_id,
+            "title": result_title,
+            "artists": result_artists,
+            "duration_seconds": int(r.get("duration_seconds") or 0),
+            "score": round(score, 1),
+            "thumbnail_url": thumbnail_url,
+        })
+
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    return candidates[:10]
+
+
+async def redownload_track_by_video_id(track_id: str, video_id: str) -> bool:
+    """Download and cache a specific YouTube video for the given track_id.
+    
+    Replaces any existing cached track.
+    """
+    import re as _re
+    if not _re.match(r'^[a-zA-Z0-9_-]{6,20}$', video_id):
+        raise ValueError(f"Invalid video_id: {video_id}")
+
+    cache_path = TRACK_CACHE_DIR / f"{_safe_track_id(track_id)}.mp3"
+    loop = asyncio.get_event_loop()
+    tmp_path = Path(tempfile.mkdtemp()) / "track.mp3"
+
+    ok = await loop.run_in_executor(_executor, _download_by_video_id, video_id, tmp_path)
+    if not ok or not tmp_path.exists():
+        return False
+
+    TRACK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(tmp_path), str(cache_path))
+    logger.info(f"redownload_track_by_video_id: saved {cache_path} ({cache_path.stat().st_size // 1024}KB)")
+    return True
+
+
 def _download_by_video_id(video_id: str, out_path: Path) -> bool:
     """Download a specific YouTube video by ID."""
     tmp_dir = tempfile.mkdtemp()

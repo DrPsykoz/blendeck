@@ -9,11 +9,13 @@ import {
   fetchAdminCacheOverview,
   AdminCacheOverview,
   AdminCachedTracksList,
+  AdminCachedTrackItem,
 } from "@/lib/api";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Shield, Trash2, Database, RefreshCw, Play, Pause, ChevronDown, ChevronUp } from "lucide-react";
+import { ArrowLeft, Shield, Trash2, Database, RefreshCw, Play, Pause, ChevronDown, ChevronUp, Search } from "lucide-react";
+import TrackRecherche from "@/components/TrackRecherche";
 
 function formatStorage(valueMb: number): string {
   if (valueMb >= 1024) {
@@ -29,6 +31,7 @@ export default function AdminPage() {
   const [trackSearch, setTrackSearch] = useState("");
   const [expandedTrackKey, setExpandedTrackKey] = useState<string | null>(null);
   const [playingTrackKey, setPlayingTrackKey] = useState<string | null>(null);
+  const [searchTarget, setSearchTarget] = useState<AdminCachedTrackItem | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
 
@@ -170,6 +173,7 @@ export default function AdminPage() {
   const data = overviewQuery.data;
 
   return (
+    <>
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -389,6 +393,15 @@ export default function AdminPage() {
                                       {isPlaying ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
                                       {isPlaying ? "Pause" : "Écouter"}
                                     </button>
+                                    {item.source === "tracks" && (
+                                      <button
+                                        onClick={() => setSearchTarget(item)}
+                                        className="inline-flex items-center gap-1 rounded-md border border-deck-border bg-deck-surface px-2 py-1 text-xs text-sand-300 hover:bg-deck-surface/70"
+                                      >
+                                        <Search className="h-3 w-3" />
+                                        Rechercher
+                                      </button>
+                                    )}
                                     <button
                                       onClick={() => {
                                         setTrackIdToDelete(item.track_id);
@@ -440,5 +453,20 @@ export default function AdminPage() {
         </>
       )}
     </div>
+
+    {/* Modal de recherche YouTube Music */}
+    {searchTarget && (
+      <TrackRecherche
+        trackId={searchTarget.track_id}
+        artist={searchTarget.artist || ""}
+        title={searchTarget.name || searchTarget.track_id}
+        onSuccess={() => {
+          tracksQuery.refetch();
+          setSearchTarget(null);
+        }}
+        onClose={() => setSearchTarget(null)}
+      />
+    )}
+  </>
   );
 }

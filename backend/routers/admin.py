@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from core.config import get_settings
 from services.spotify import get_current_user_profile
@@ -346,3 +348,77 @@ async def admin_stream_cached_track(
         raise HTTPException(status_code=404, detail="Track cache file not found")
 
     return FileResponse(file_path, media_type="audio/mpeg", filename=file_path.name)
+
+
+_TRACK_ID_RE = re.compile(r'^[a-zA-Z0-9]{1,32}$')
+_VIDEO_ID_RE = re.compile(r'^[a-zA-Z0-9_-]{6,20}$')
+
+
+@router.get("/search-candidates")
+async def admin_search_candidates(
+    track_id: str = Query(...),
+    artist: str = Query(...),
+    title: str = Query(...),
+    duration_ms: int = Query(0),
+    authorization: str = Header(),
+):
+    """Search YouTube Music and return scored candidates for manual selection."""
+    await _require_admin(authorization)
+
+    if not _TRACK_ID_RE.match(track_id):
+        raise HTTPException(status_code=400, detail="Invalid track ID")
+    if len(artist) > 200 or len(title) > 200:
+        raise HTTPException(status_code=400, detail="Artist/title too long")
+
+    from services.mix_generator import search_ytmusic_candidates
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        candidates = await loop.run_in_executor(
+            ex, search_ytmusic_candidates, artist, title, duration_ms
+        )
+
+    return {"track_id": track_id, "candidates": candidates}
+
+
+class RedownloadRequest(BaseModel):
+    track_id: str
+    video_id: str
+    artist: str = ""
+    title: str = ""
+
+
+@router.post("/redownload-track")
+async def admin_redownload_track(body: RedownloadRequest, authorization: str = Header()):
+    """Download and cache a specific YouTube video for a given track_id."""
+    await _require_admin(authorization)
+
+    if not _TRACK_ID_RE.match(body.track_id):
+        raise HTTPException(status_code=400, detail="Invalid track ID")
+    if not _VIDEO_ID_RE.match(body.video_id):
+        raise HTTPException(status_code=400, detail="Invalid video ID")
+
+    from services.mix_generator import redownload_track_by_video_id
+
+    try:
+        ok = await redownload_track_by_video_id(body.track_id, body.video_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Download failed")
+
+    if not ok:
+        raise HTTPException(status_code=502, detail="Download failed — check logs")
+
+    # Check the resulting file size
+    cache_path = Path("/app/cache/tracks") / f"{body.track_id}.mp3"
+    size_mb = round(cache_path.stat().st_size / (1024 * 1024), 2) if cache_path.exists() else 0
+
+    return {
+        "track_id": body.track_id,
+        "video_id": body.video_id,
+        "size_mb": size_mb,
+        "success": True,
+    }

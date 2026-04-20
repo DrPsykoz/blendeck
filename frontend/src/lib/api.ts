@@ -165,6 +165,27 @@ export interface AdminCachedTracksList {
 	items: AdminCachedTrackItem[];
 }
 
+export interface YTMusicCandidate {
+	video_id: string;
+	title: string;
+	artists: string;
+	duration_seconds: number;
+	score: number;
+	thumbnail_url: string | null;
+}
+
+export interface SearchCandidatesResult {
+	track_id: string;
+	candidates: YTMusicCandidate[];
+}
+
+export interface RedownloadResult {
+	track_id: string;
+	video_id: string;
+	size_mb: number;
+	success: boolean;
+}
+
 // API functions
 export async function fetchPlaylists(): Promise<PlaylistSummary[]> {
 	return apiFetch<PlaylistSummary[]>("/api/playlists");
@@ -246,6 +267,40 @@ export async function fetchAdminTrackAudioBlob(
 		throw new Error(detail || `API error: ${response.status}`);
 	}
 	return response.blob();
+}
+
+export async function searchAdminCandidates(
+	trackId: string,
+	artist: string,
+	title: string,
+	durationMs = 0,
+): Promise<SearchCandidatesResult> {
+	const params = new URLSearchParams({
+		track_id: trackId,
+		artist,
+		title,
+		duration_ms: String(durationMs),
+	});
+	return apiFetch<SearchCandidatesResult>(
+		`/api/admin/search-candidates?${params.toString()}`,
+	);
+}
+
+export async function redownloadAdminTrack(
+	trackId: string,
+	videoId: string,
+	artist = "",
+	title = "",
+): Promise<RedownloadResult> {
+	return apiFetch<RedownloadResult>("/api/admin/redownload-track", {
+		method: "POST",
+		body: JSON.stringify({
+			track_id: trackId,
+			video_id: videoId,
+			artist,
+			title,
+		}),
+	});
 }
 
 export async function fetchPreviewUrl(
