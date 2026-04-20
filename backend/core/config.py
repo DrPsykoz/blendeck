@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     spotify_client_secret: str = ""
     spotify_redirect_uri: str = "http://localhost:3000/callback"
     frontend_url: str = "http://localhost:3000"
+    admin_email: str = "theo.frvl@gmail.com"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
