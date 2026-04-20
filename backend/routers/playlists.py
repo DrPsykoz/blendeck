@@ -117,6 +117,7 @@ async def analyze_playlist_sse(playlist_id: str, authorization: str = Header()):
             _start_prefetch_for_playlist(playlist_id, tracks)
             cached_count = sum(1 for t in tracks if t.audio_features is not None)
             need_count = len(tracks) - cached_count
+            audio_cached_ids = get_cached_track_ids([t.id for t in tracks])
 
             # Send start event
             yield _sse(
@@ -128,7 +129,7 @@ async def analyze_playlist_sse(playlist_id: str, authorization: str = Header()):
                 # All cached — send tracks immediately
                 yield _sse(
                     "complete",
-                    {"tracks": [_track_dict(t) for t in tracks]},
+                    {"tracks": [_track_dict(t, audio_cached_ids) for t in tracks]},
                 )
                 return
 
@@ -169,7 +170,7 @@ async def analyze_playlist_sse(playlist_id: str, authorization: str = Header()):
 
             yield _sse(
                 "complete",
-                {"tracks": [_track_dict(t) for t in analyzed_tracks]},
+                {"tracks": [_track_dict(t, audio_cached_ids) for t in analyzed_tracks]},
             )
 
         except Exception as e:
@@ -193,7 +194,7 @@ def _sse(event_type: str, data: dict) -> str:
     return f"event: {event_type}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
-def _track_dict(t: Track) -> dict:
+def _track_dict(t: Track, cached_ids: set[str] | None = None) -> dict:
     """Convert Track to dict for JSON serialization."""
     d: dict = {
         "id": t.id,
@@ -207,6 +208,7 @@ def _track_dict(t: Track) -> dict:
         "release_year": t.release_year,
         "audio_features": None,
         "camelot": None,
+        "audio_cached": t.id in cached_ids if cached_ids is not None else t.audio_cached,
     }
     if t.audio_features:
         af = t.audio_features
