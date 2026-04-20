@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 import httpx
 
@@ -13,12 +14,75 @@ SPOTIFY_API = "https://api.spotify.com/v1"
 logger = logging.getLogger(__name__)
 
 
+class CachedValue:
+    """Simple TTL cache for a single value."""
+    def __init__(self, ttl_seconds: int = 1800):  # 30 minutes default
+        self.value = None
+        self.ttl_seconds = ttl_seconds
+        self.cached_at = 0
+
+    def set(self, value):
+        self.value = value
+        self.cached_at = time.time()
+
+    def get(self):
+        if time.time() - self.cached_at > self.ttl_seconds:
+            return None
+        return self.value
+
+    def is_valid(self) -> bool:
+        return time.time() - self.cached_at <= self.ttl_seconds
+
+
+# Cache for user profiles by token (token -> user profile)
+_user_profile_cache: dict[str, CachedValue] = {}
+
+# Cache for user playlists by token (token -> list of playlists)
+_user_playlists_cache: dict[str, CachedValue] = {}
+
+
 def _headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+async def get_current_user_profile(token: str) -> dict:
+    """Fetch current Spotify user profile (id, email, display_name) with 30min cache."""
+    # Check cache
+    if token in _user_profile_cache:
+        cached = _user_profile_cache[token].get()
+        if cached is not None:
+            logger.debug(f"Cache hit for user profile")
+            return cached
+
+    # Fetch from API
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"{SPOTIFY_API}/me", headers=_headers(token))
+        resp.raise_for_status()
+        data = resp.json()
+    
+    profile = {
+        "id": data.get("id"),
+        "email": data.get("email"),
+        "display_name": data.get("display_name"),
+    }
+    
+    # Cache the result
+    if token not in _user_profile_cache:
+        _user_profile_cache[token] = CachedValue(ttl_seconds=1800)  # 30 minutes
+    _user_profile_cache[token].set(profile)
+    
+    return profile
+
+
 async def get_user_playlists(token: str) -> list[PlaylistSummary]:
-    """Fetch all playlists of the current user."""
+    """Fetch all playlists of the current user with 30min cache."""
+    # Check cache
+    if token in _user_playlists_cache:
+        cached = _user_playlists_cache[token].get()
+        if cached is not None:
+            logger.debug(f"Cache hit for user playlists")
+            return cached
+
     playlists: list[PlaylistSummary] = []
     url = f"{SPOTIFY_API}/me/playlists?limit=50"
 
@@ -49,6 +113,11 @@ async def get_user_playlists(token: str) -> list[PlaylistSummary]:
                 )
 
             url = data.get("next")
+
+    # Cache the result
+    if token not in _user_playlists_cache:
+        _user_playlists_cache[token] = CachedValue(ttl_seconds=1800)  # 30 minutes
+    _user_playlists_cache[token].set(playlists)
 
     return playlists
 
@@ -395,10 +464,9 @@ async def create_playlist(
 ) -> str:
     """Create a new playlist and return its ID."""
     async with httpx.AsyncClient() as client:
-        # Get current user ID
-        resp = await client.get(f"{SPOTIFY_API}/me", headers=_headers(token))
-        resp.raise_for_status()
-        user_id = resp.json()["id"]
+        # Get current user ID from cache or API
+        user_profile = await get_current_user_profile(token)
+        user_id = user_profile["id"]
 
         resp = await client.post(
             f"{SPOTIFY_API}/users/{user_id}/playlists",
