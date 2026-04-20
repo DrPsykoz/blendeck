@@ -403,6 +403,8 @@ export default function ExportMenu({
                     ? `Découpe ${mixProgress.current}/${mixProgress.total}`
                     : mixPhase === "analyzing"
                     ? `Transition ${mixProgress.current}/${mixProgress.total}`
+                    : mixPhase === "mixing"
+                    ? `${Math.floor(mixProgress.current / 60)}:${String(Math.floor(mixProgress.current % 60)).padStart(2, "0")} / ${Math.floor(mixProgress.total / 60)}:${String(Math.floor(mixProgress.total % 60)).padStart(2, "0")}`
                     : `${mixProgress.current}/${mixProgress.total}`}
                 </span>
                 <span className="font-mono">{Math.round((mixProgress.current / mixProgress.total) * 100)}%</span>

@@ -1,6 +1,6 @@
 "use client";
 
-import { Track, TransitionScore, fetchPreviewUrl, previewStreamUrl } from "@/lib/api";
+import { Track, TransitionScore, fetchPreviewUrl, previewStreamUrl, loadTransitionPreview } from "@/lib/api";
 import TransitionBadge from "./TransitionBadge";
 import {
   DndContext,
@@ -53,6 +53,7 @@ function SortableRow({
   track,
   index,
   transition,
+  prevTrack,
   isPlaying,
   isLoading,
   playProgress,
@@ -60,10 +61,14 @@ function SortableRow({
   isSpotifyPlaying,
   onPlaySpotify,
   compact,
+  onPlayTransition,
+  isTransitionPlaying,
+  isTransitionLoading,
 }: {
   track: Track;
   index: number;
   transition?: TransitionScore;
+  prevTrack?: Track;
   isPlaying: boolean;
   isLoading: boolean;
   playProgress: number;
@@ -71,6 +76,9 @@ function SortableRow({
   isSpotifyPlaying: boolean;
   onPlaySpotify?: (uri: string) => void;
   compact?: boolean;
+  onPlayTransition?: () => void;
+  isTransitionPlaying?: boolean;
+  isTransitionLoading?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition: dndTransition } =
     useSortable({ id: track.id });
@@ -84,13 +92,18 @@ function SortableRow({
 
   return (
     <>
-      {/* Transition indicator between rows */}
+      {/* Transition connector between rows */}
       {index > 0 && transition && !compact && (
-        <tr>
-          <td colSpan={10} className="py-0.5 px-4">
-            <div className="flex justify-center">
-              <TransitionBadge transition={transition} compact />
-            </div>
+        <tr className="group/trans">
+          <td colSpan={10} className="py-0 px-0">
+            <TransitionBadge
+              transition={transition}
+              fromTrack={prevTrack}
+              toTrack={track}
+              onPlay={onPlayTransition}
+              isPlaying={isTransitionPlaying}
+              isLoading={isTransitionLoading}
+            />
           </td>
         </tr>
       )}
@@ -245,6 +258,9 @@ export default function TrackTable({ tracks, transitions, onReorder, currentSpot
   const [loadingTrackId, setLoadingTrackId] = useState<string | null>(null);
   const [playProgress, setPlayProgress] = useState(0);
   const [localTracks, setLocalTracks] = useState(tracks);
+  const [playingTransitionKey, setPlayingTransitionKey] = useState<string | null>(null);
+  const [loadingTransitionKey, setLoadingTransitionKey] = useState<string | null>(null);
+  const transitionBlobRef = useRef<string | null>(null);
 
   // Sync localTracks when parent tracks change
   useEffect(() => {
@@ -257,6 +273,9 @@ export default function TrackTable({ tracks, transitions, onReorder, currentSpot
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
+      }
+      if (transitionBlobRef.current) {
+        URL.revokeObjectURL(transitionBlobRef.current);
       }
     };
   }, []);
@@ -293,7 +312,72 @@ export default function TrackTable({ tracks, transitions, onReorder, currentSpot
     });
   }, []);
 
+  const handlePlayTransition = useCallback(async (fromId: string, toId: string) => {
+    const key = `${fromId}_${toId}`;
+
+    // Toggle off if already playing this transition
+    if (playingTransitionKey === key && audioRef.current) {
+      audioRef.current.pause();
+      setPlayingTransitionKey(null);
+      setPlayProgress(0);
+      return;
+    }
+
+    // Stop any track preview
+    if (audioRef.current) {
+      audioRef.current.pause();
+    }
+    setPlayingTrackId(null);
+    setPlayProgress(0);
+
+    // Find track info
+    const fromTrack = localTracks.find((t) => t.id === fromId);
+    const toTrack = localTracks.find((t) => t.id === toId);
+    if (!fromTrack || !toTrack) return;
+
+    setLoadingTransitionKey(key);
+    try {
+      // Revoke previous blob
+      if (transitionBlobRef.current) {
+        URL.revokeObjectURL(transitionBlobRef.current);
+      }
+      const blobUrl = await loadTransitionPreview(
+        fromId, toId,
+        fromTrack.name, fromTrack.artists[0] || "",
+        toTrack.name, toTrack.artists[0] || "",
+      );
+      transitionBlobRef.current = blobUrl;
+      setLoadingTransitionKey(null);
+
+      const audio = new Audio(blobUrl);
+      audio.volume = 0.5;
+      audioRef.current = audio;
+      setPlayingTransitionKey(key);
+      setPlayProgress(0);
+
+      audio.addEventListener("timeupdate", () => {
+        if (audio.duration) setPlayProgress(audio.currentTime / audio.duration);
+      });
+      audio.addEventListener("ended", () => {
+        setPlayingTransitionKey(null);
+        setPlayProgress(0);
+      });
+      audio.addEventListener("error", () => {
+        setPlayingTransitionKey(null);
+        setPlayProgress(0);
+      });
+
+      await audio.play();
+    } catch {
+      setLoadingTransitionKey(null);
+      setPlayingTransitionKey(null);
+    }
+  }, [playingTransitionKey, localTracks]);
+
   const handleTogglePlay = useCallback(async (track: Track) => {
+    // Stop any transition preview
+    setPlayingTransitionKey(null);
+
     // If same track, toggle pause/play
     if (playingTrackId === track.id && audioRef.current) {
       audioRef.current.pause();
@@ -373,21 +457,29 @@ export default function TrackTable({ tracks, transitions, onReorder, currentSpot
               </tr>
             </thead>
             <tbody>
-              {localTracks.map((track, i) => (
-                <SortableRow
-                  key={track.id}
-                  track={track}
-                  index={i}
-                  transition={transitionMap.get(track.id)}
-                  isPlaying={playingTrackId === track.id}
-                  isLoading={loadingTrackId === track.id}
-                  playProgress={playingTrackId === track.id ? playProgress : 0}
-                  onTogglePlay={handleTogglePlay}
-                  isSpotifyPlaying={currentSpotifyUri === track.uri}
-                  onPlaySpotify={onPlaySpotify}
-                  compact={compact}
-                />
-              ))}
+              {localTracks.map((track, i) => {
+                const trans = transitionMap.get(track.id);
+                const transKey = trans ? `${trans.from_track_id}_${trans.to_track_id}` : null;
+                return (
+                  <SortableRow
+                    key={track.id}
+                    track={track}
+                    index={i}
+                    transition={trans}
+                    prevTrack={i > 0 ? localTracks[i - 1] : undefined}
+                    isPlaying={playingTrackId === track.id}
+                    isLoading={loadingTrackId === track.id}
+                    playProgress={playingTrackId === track.id ? playProgress : 0}
+                    onTogglePlay={handleTogglePlay}
+                    isSpotifyPlaying={currentSpotifyUri === track.uri}
+                    onPlaySpotify={onPlaySpotify}
+                    compact={compact}
+                    onPlayTransition={trans ? () => handlePlayTransition(trans.from_track_id, trans.to_track_id) : undefined}
+                    isTransitionPlaying={transKey === playingTransitionKey}
+                    isTransitionLoading={transKey === loadingTransitionKey}
+                  />
+                );
+              })}
             </tbody>
           </table>
         </SortableContext>
