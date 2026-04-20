@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import get_settings
-from routers import auth, playlists, sort, export
+from routers import auth, playlists, sort, export, admin
 
 logging.basicConfig(level=logging.INFO)
 settings = get_settings()
@@ -11,7 +11,7 @@ settings = get_settings()
 app = FastAPI(
     title="Blendeck",
     description="Transform your Spotify playlists into DJ-mixed sets",
-    version="1.0.0",
+    version="1.0.11",
 )
 
 app.add_middleware(
@@ -22,7 +22,7 @@ app.add_middleware(
         else [settings.frontend_url]
     ),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -30,6 +30,7 @@ app.include_router(auth.router)
 app.include_router(playlists.router)
 app.include_router(sort.router)
 app.include_router(export.router)
+app.include_router(admin.router)
 
 
 @app.get("/api/health")
