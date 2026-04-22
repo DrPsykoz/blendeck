@@ -1,0 +1,151 @@
+name: Build and Deploy to Dedicated Server
+
+on:
+    push:
+        tags:
+            - "v*"
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Git tag to deploy (ex: v1.2.3)"
+                required: true
+                default: "v0.0.0"
+
+concurrency:
+    group: production-deploy
+    cancel-in-progress: false
+
+jobs:
+    build_and_push:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+        outputs:
+            image_tag: ${{ steps.vars.outputs.image_tag }}
+            owner_lc: ${{ steps.vars.outputs.owner_lc }}
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+              with:
+                  ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+
+            - name: Compute image variables
+              id: vars
+              run: |
+                  set -euo pipefail
+                  RELEASE_TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}"
+                  case "$RELEASE_TAG" in
+                    v*) ;;
+                    *)
+                      echo "Tag invalide: $RELEASE_TAG (format attendu: v*)"
+                      exit 1
+                      ;;
+                  esac
+
+                  git rev-parse --verify "refs/tags/$RELEASE_TAG" >/dev/null 2>&1
+                  echo "owner_lc=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+                  echo "image_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Login to GHCR
+              uses: docker/login-action@v3
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Build and push backend image
+              uses: docker/build-push-action@v6
+              with:
+                  context: ./backend
+                  push: true
+                  tags: |
+                      ghcr.io/${{ steps.vars.outputs.owner_lc }}/blendeck-backend:${{ steps.vars.outputs.image_tag }}
+                      ghcr.io/${{ steps.vars.outputs.owner_lc }}/blendeck-backend:latest
+
+            - name: Build and push frontend image
+              uses: docker/build-push-action@v6
+              with:
+                  context: ./frontend
+                  push: true
+                  tags: |
+                      ghcr.io/${{ steps.vars.outputs.owner_lc }}/blendeck-frontend:${{ steps.vars.outputs.image_tag }}
+                      ghcr.io/${{ steps.vars.outputs.owner_lc }}/blendeck-frontend:latest
+
+    deploy:
+        runs-on: ubuntu-latest
+        needs: build_and_push
+        env:
+            SSH_HOST: ${{ secrets.SSH_HOST }}
+            SSH_USER: ${{ secrets.SSH_USER }}
+            SSH_PORT: ${{ secrets.SSH_PORT }}
+            SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+            SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+            DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+            GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+            GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+            OWNER_LC: ${{ needs.build_and_push.outputs.owner_lc }}
+            IMAGE_TAG: ${{ needs.build_and_push.outputs.image_tag }}
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+              with:
+                  ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+
+            - name: Validate required secrets
+              run: |
+                  set -euo pipefail
+                  test -n "$SSH_HOST"
+                  test -n "$SSH_USER"
+                  test -n "$SSH_PRIVATE_KEY"
+                  test -n "$GHCR_USERNAME"
+                  test -n "$GHCR_TOKEN"
+
+            - name: Configure SSH
+              run: |
+                  set -euo pipefail
+                  mkdir -p ~/.ssh
+                  chmod 700 ~/.ssh
+
+                  printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+                  chmod 600 ~/.ssh/id_ed25519
+
+                  if [ -n "${SSH_KNOWN_HOSTS:-}" ]; then
+                    printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+                  else
+                    ssh-keyscan -p "${SSH_PORT:-22}" "$SSH_HOST" >> ~/.ssh/known_hosts
+                  fi
+                  chmod 644 ~/.ssh/known_hosts
+
+            - name: Upload production compose file
+              run: |
+                  set -euo pipefail
+                  APP_DIR="${DEPLOY_PATH:-/opt/blendeck}"
+
+                  ssh -p "${SSH_PORT:-22}" "${SSH_USER}@${SSH_HOST}" "mkdir -p '${APP_DIR}'"
+                  scp -P "${SSH_PORT:-22}" docker-compose.prod.yml "${SSH_USER}@${SSH_HOST}:${APP_DIR}/docker-compose.prod.yml"
+
+            - name: Deploy images over SSH
+              run: |
+                  set -euo pipefail
+                  APP_DIR="${DEPLOY_PATH:-/opt/blendeck}"
+
+                  ssh -p "${SSH_PORT:-22}" "${SSH_USER}@${SSH_HOST}" <<EOF
+                  set -euo pipefail
+                  cd "$APP_DIR"
+
+                  export GHCR_USERNAME="$GHCR_USERNAME"
+                  export GHCR_TOKEN="$GHCR_TOKEN"
+                  export GHCR_OWNER="$OWNER_LC"
+                  export IMAGE_TAG="$IMAGE_TAG"
+
+                  echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+                  docker compose -f docker-compose.prod.yml pull
+                  docker compose -f docker-compose.prod.yml up -d --remove-orphans
+                  docker image prune -f
+                  EOF

@@ -197,6 +197,56 @@ npm run dev
 
 ---
 
+## 🚀 Déploiement Automatique (GitHub Actions + GHCR)
+
+Le workflow `.github/workflows/deploy.yml` déploie en 2 phases :
+
+1. Build des images Docker backend/frontend
+2. Push vers GHCR puis pull des images sur le serveur via SSH
+
+Cette approche évite de builder sur le serveur de production.
+
+### Déclencheurs
+
+- Push d'un tag de release au format `v*` (ex: `v1.2.3`)
+- Déclenchement manuel depuis l'onglet **Actions** (input `tag`)
+
+### Secrets GitHub à configurer
+
+Dans **Settings > Secrets and variables > Actions**, ajouter :
+
+- `SSH_HOST` : IP ou domaine du serveur
+- `SSH_USER` : utilisateur SSH (ex: `deploy`)
+- `SSH_PRIVATE_KEY` : clé privée SSH (format OpenSSH)
+- `SSH_PORT` : port SSH (optionnel, défaut `22`)
+- `SSH_KNOWN_HOSTS` : sortie de `ssh-keyscan -H <host>` (optionnel mais recommandé)
+- `DEPLOY_PATH` : dossier projet sur le serveur (optionnel, défaut `/opt/blendeck`)
+- `GHCR_USERNAME` : utilisateur GitHub autorisé à lire les packages GHCR
+- `GHCR_TOKEN` : token GitHub avec permission `read:packages`
+
+### Pré-requis côté serveur
+
+- Docker + Docker Compose installés
+- Arborescence de déploiement créée (ex: `/opt/blendeck`)
+- Fichiers d'environnement présents dans ce dossier :
+    - `backend/.env`
+    - `frontend/.env.local`
+
+Le workflow utilise `docker-compose.prod.yml` et déploie des images versionnées par tag Git.
+
+### Premier déploiement conseillé
+
+1. Créer les secrets GitHub
+2. Préparer `/opt/blendeck/backend/.env` et `/opt/blendeck/frontend/.env.local` sur le serveur
+3. Créer et pousser un tag release
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+---
+
 ## 🎵 Algorithmes
 
 ### Scoring de transition
