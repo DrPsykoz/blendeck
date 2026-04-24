@@ -163,10 +163,17 @@ def _safe_track_id(track_id: str) -> str:
     return safe[:64] if safe else "unknown"
 
 
-def _trim_cache_path(track_id: str, target_s: int, source_size: int, preserve_start: bool = False) -> Path:
+def _trim_cache_path(
+    track_id: str,
+    target_s: int,
+    source_size: int,
+    preserve_start: bool = False,
+    next_energy_fingerprint: str | None = None,
+) -> Path:
     safe_id = _safe_track_id(track_id)
     trim_mode = "intro" if preserve_start else "best"
-    return TRIM_CACHE_DIR / f"{safe_id}_t{target_s}_s{source_size}_{trim_mode}.mp3"
+    suffix = f"_ne{hash(next_energy_fingerprint) & 0xFFFF:04x}" if next_energy_fingerprint else ""
+    return TRIM_CACHE_DIR / f"{safe_id}_t{target_s}_s{source_size}_{trim_mode}{suffix}.mp3"
 
 
 def _get_cached_trimmed_track(
@@ -174,8 +181,9 @@ def _get_cached_trimmed_track(
     target_s: int,
     source_size: int,
     preserve_start: bool = False,
+    next_energy_fingerprint: str | None = None,
 ) -> Path | None:
-    cached = _trim_cache_path(track_id, target_s, source_size, preserve_start)
+    cached = _trim_cache_path(track_id, target_s, source_size, preserve_start, next_energy_fingerprint)
     if cached.exists() and cached.stat().st_size > 1000:
         return cached
     return None
@@ -187,10 +195,11 @@ def _store_trimmed_track_cache(
     source_size: int,
     src_path: Path,
     preserve_start: bool = False,
+    next_energy_fingerprint: str | None = None,
 ) -> None:
     """Store a trimmed output in cache, keyed by track+params+source size."""
     try:
-        cache_path = _trim_cache_path(track_id, target_s, source_size, preserve_start)
+        cache_path = _trim_cache_path(track_id, target_s, source_size, preserve_start, next_energy_fingerprint)
         tmp_path = cache_path.with_suffix(".tmp")
         shutil.copy(str(src_path), str(tmp_path))
         tmp_path.replace(cache_path)
@@ -758,12 +767,18 @@ def _analyze_transition_points(mp3_path: Path) -> dict:
 
 
 def _find_best_segment(energy: list[float], target_s: int, total_s: float,
-                       vocal_score: list[float] | None = None) -> tuple[float, float]:
+                       vocal_score: list[float] | None = None,
+                       next_energy: list[float] | None = None,
+                       preserve_start: bool = False) -> tuple[float, float]:
     """Find the segment of target_s seconds with the best combination of
     energy and vocal presence.
 
     Returns (start_s, end_s). Prefers segments with vocals (singing) over
     purely instrumental sections, while still favouring high energy.
+
+    If next_energy is provided, additionally favors segments whose *end* falls
+    at a low-energy, low-vocal moment — creating a natural exit ramp that
+    transitions smoothly into the next track.
     """
     if len(energy) == 0 or total_s <= target_s:
         return (0.0, total_s)
@@ -783,7 +798,10 @@ def _find_best_segment(energy: list[float], target_s: int, total_s: float,
 
     # Intro/outro bonus arrays
     starts = np.arange(n_positions)
-    intro_bonus = np.where(starts >= 5, 1.0, 0.7)
+    if preserve_start:
+        intro_bonus = np.ones(n_positions)
+    else:
+        intro_bonus = np.where(starts >= 5, 1.0, 0.7)
     outro_limit = n - max(5, n // 10)
     outro_penalty = np.where(starts + window <= outro_limit, 1.0, 0.8)
 
@@ -804,7 +822,34 @@ def _find_best_segment(energy: list[float], target_s: int, total_s: float,
         avg_vocal = v_sums / v_lens
         vocal_bonus = 1.0 + avg_vocal * 1.5
 
-    scores = avg_energies * intro_bonus * outro_penalty * boundary_bonus * vocal_bonus
+    # Transition-out bonus: prefer end points at low vocal/energy (clean exit)
+    # The last 5s of the segment should be quiet/instrumental to allow a smooth
+    # crossfade into the next track.
+    transition_out_bonus = np.ones(n_positions)
+    if next_energy is not None and not preserve_start:
+        tail_window = min(5, window)
+        # Per-segment: measure average energy and vocal in the last tail_window seconds
+        end_positions = starts + window  # end index for each candidate
+        tail_starts = np.maximum(0, end_positions - tail_window).astype(int)
+        tail_ends = np.minimum(end_positions, n).astype(int)
+        tail_energies = np.array([
+            np.mean(energy_arr[s:e]) if e > s else energy_arr[s]
+            for s, e in zip(tail_starts, tail_ends)
+        ])
+        # Low tail energy = good exit point (1.0 → 1.3 bonus range)
+        peak_tail = np.max(tail_energies) + 1e-8
+        transition_out_bonus = 1.0 + (1.0 - tail_energies / peak_tail) * 0.3
+
+        if vocal_arr is not None:
+            tail_vocals = np.array([
+                np.mean(vocal_arr[s:e]) if e > s and e <= len(vocal_arr) else 0.0
+                for s, e in zip(tail_starts.tolist(), tail_ends.tolist())
+            ])
+            # Low vocal at tail = good exit (1.0 → 1.2 bonus range)
+            peak_vocal_tail = np.max(tail_vocals) + 1e-8
+            transition_out_bonus *= 1.0 + (1.0 - tail_vocals / peak_vocal_tail) * 0.2
+
+    scores = avg_energies * intro_bonus * outro_penalty * boundary_bonus * vocal_bonus * transition_out_bonus
     best_start = int(np.argmax(scores))
 
     start_s = float(best_start)
@@ -818,11 +863,16 @@ def _trim_track(
     out_path: Path,
     track_id: str | None = None,
     preserve_start: bool = False,
+    next_track_energy: list[float] | None = None,
 ) -> bool:
     """Analyze and trim a track to the best segment of target_s seconds.
 
     If the track is already shorter than target_s + 30s, keep it as-is.
     Applies short fade-in/fade-out to avoid clicks at cut points.
+
+    When next_track_energy is provided, the segment selection also optimizes
+    the exit point to end at a low-energy/low-vocal moment for a clean
+    transition into the next track.
     """
     source_size = 0
     try:
@@ -830,8 +880,20 @@ def _trim_track(
     except Exception:
         source_size = 0
 
+    # Build a compact hash of next-track energy fingerprint to use in cache key.
+    # Only include it when provided so non-transition trims still hit the old cache.
+    next_energy_fingerprint: str | None = None
+    if next_track_energy:
+        # Quantize to 8 representative values to build a stable fingerprint
+        ne = next_track_energy[:30]  # only first 30s matters (intro of next track)
+        step = max(1, len(ne) // 8)
+        representative = [round(ne[j], 4) for j in range(0, len(ne), step)][:8]
+        next_energy_fingerprint = "_".join(str(v) for v in representative)
+
     if track_id and source_size > 0:
-        cached_trim = _get_cached_trimmed_track(track_id, target_s, source_size, preserve_start)
+        cached_trim = _get_cached_trimmed_track(
+            track_id, target_s, source_size, preserve_start, next_energy_fingerprint
+        )
         if cached_trim:
             _hardlink_or_copy(cached_trim, out_path)
             logger.info(f"Trim cache: hit for '{track_id}' target={target_s}s")
@@ -855,7 +917,7 @@ def _trim_track(
         logger.info(f"Trim: '{mp3_path.name}' is {total_s:.0f}s, no trim needed (target {target_s}s)")
         _hardlink_or_copy(mp3_path, out_path)
         if track_id and source_size > 0:
-            _store_trimmed_track_cache(track_id, target_s, source_size, out_path, preserve_start)
+            _store_trimmed_track_cache(track_id, target_s, source_size, out_path, preserve_start, next_energy_fingerprint)
         return True
 
     logger.info(f"Trim: analyzing '{mp3_path.name}' ({total_s:.0f}s → target {target_s}s)")
@@ -870,7 +932,11 @@ def _trim_track(
         start_s = min(15.0, total_s * 0.1)
         end_s = min(start_s + target_s, total_s)
     else:
-        start_s, end_s = _find_best_segment(energy, target_s, total_s, vocal_score)
+        start_s, end_s = _find_best_segment(
+            energy, target_s, total_s, vocal_score,
+            next_energy=next_track_energy,
+            preserve_start=preserve_start,
+        )
 
     duration = end_s - start_s
     fade_s = 2  # 2s fade in/out at cut points
@@ -912,7 +978,7 @@ def _trim_track(
             shutil.copy(str(mp3_path), str(out_path))
             return True
         if track_id and source_size > 0:
-            _store_trimmed_track_cache(track_id, target_s, source_size, out_path, preserve_start)
+            _store_trimmed_track_cache(track_id, target_s, source_size, out_path, preserve_start, next_energy_fingerprint)
         return True
     except Exception as e:
         logger.error(f"Trim: failed: {e}")
@@ -1359,6 +1425,20 @@ async def generate_mix(
             trimmed_paths: list[Path] = []
             trim_done = 0
 
+            # Pre-analyze energy for all tracks once, so we can pass next_track_energy
+            # to each trim call without re-loading audio multiple times.
+            logger.info("Trim: pre-analyzing energy curves for transition-aware trimming...")
+            energy_curves: list[list[float]] = [[] for _ in range(n_trim)]
+            for batch_start in range(0, n_trim, _MIX_TRIM_CONCURRENCY * 2):
+                batch_end = min(batch_start + _MIX_TRIM_CONCURRENCY * 2, n_trim)
+                batch_futures = [
+                    loop.run_in_executor(_executor, _analyze_energy_curve, downloaded[i])
+                    for i in range(batch_start, batch_end)
+                ]
+                results = await asyncio.gather(*batch_futures)
+                for idx, curve in enumerate(results):
+                    energy_curves[batch_start + idx] = curve
+
             for batch_start in range(0, n_trim, _MIX_TRIM_CONCURRENCY):
                 batch_end = min(batch_start + _MIX_TRIM_CONCURRENCY, n_trim)
                 batch_futures = []
@@ -1368,8 +1448,10 @@ async def generate_mix(
                     track_id = downloaded_track_ids[i]
                     trimmed_path = work_dir / f"trimmed_{i:03d}.mp3"
                     trimmed_paths.append(trimmed_path)
+                    # Pass next track's energy so trim favors a clean exit point
+                    next_energy = energy_curves[i + 1] if i + 1 < n_trim else None
                     batch_futures.append(loop.run_in_executor(
-                        _executor, _trim_track, dl_path, target_duration_s, trimmed_path, track_id, i == 0
+                        _executor, _trim_track, dl_path, target_duration_s, trimmed_path, track_id, i == 0, next_energy
                     ))
 
                 await asyncio.gather(*batch_futures)
@@ -1612,7 +1694,10 @@ def _generate_transition_preview_sync(
         # Apply the same target-duration trimming logic as final mix when requested.
         if target_duration_s > 0:
             try:
-                ok_a = _trim_track(track_a, target_duration_s, trimmed_a, from_id, from_is_first)
+                # Pre-analyze track B energy so track A can optimize its exit point
+                energy_b, _ = _analyze_for_trim(track_b)
+                ok_a = _trim_track(track_a, target_duration_s, trimmed_a, from_id, from_is_first,
+                                   next_track_energy=energy_b if energy_b else None)
                 ok_b = _trim_track(track_b, target_duration_s, trimmed_b, to_id, False)
                 if ok_a and trimmed_a.exists() and trimmed_a.stat().st_size > 1000:
                     track_a_use = trimmed_a
