@@ -32,6 +32,7 @@ import TrackTable from "@/components/TrackTable";
 import EnergyChart from "@/components/EnergyChart";
 import SetGeneratorPanel from "@/components/SetGeneratorPanel";
 import ExportMenu from "@/components/ExportMenu";
+import ExportSettingsPanel from "@/components/ExportSettingsPanel";
 import MixHistory from "@/components/MixHistory";
 import AnalysisProgress from "@/components/AnalysisProgress";
 
@@ -414,10 +415,13 @@ export default function PlaylistPage() {
             transitions={transitions}
             playlistId={playlistId}
             playlistName="Playlist"
-            onTransitionSettingsChange={(style, duration, targetDuration) => {
+            transitionStyle={previewTransitionStyle}
+            crossfade={previewTransitionDuration}
+            targetDuration={previewTargetDuration}
+            onTransitionSettingsChange={(style, duration, targetDur) => {
               setPreviewTransitionStyle(style);
               setPreviewTransitionDuration(duration);
-              setPreviewTargetDuration(targetDuration);
+              setPreviewTargetDuration(targetDur);
             }}
           />
         </div>
@@ -517,6 +521,16 @@ export default function PlaylistPage() {
 
         {/* Sidebar: Set generator */}
         <div className="lg:sticky lg:top-16 lg:self-start space-y-4">
+          <ExportSettingsPanel
+            transitionStyle={previewTransitionStyle}
+            crossfade={previewTransitionDuration}
+            targetDuration={previewTargetDuration}
+            onTransitionStyleChange={setPreviewTransitionStyle}
+            onCrossfadeChange={setPreviewTransitionDuration}
+            onTargetDurationChange={setPreviewTargetDuration}
+            trackCount={sortedTracks.length}
+            totalTracksDurationMs={sortedTracks.reduce((s, t) => s + t.duration_ms, 0)}
+          />
           <SetGeneratorPanel
             onGenerate={handleGenerate}
             isLoading={generateMutation.isPending}

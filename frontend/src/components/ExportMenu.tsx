@@ -9,6 +9,9 @@ interface ExportMenuProps {
   transitions: TransitionScore[];
   playlistId: string;
   playlistName: string;
+  transitionStyle?: string;
+  crossfade?: number;
+  targetDuration?: number;
   onTransitionSettingsChange?: (style: string, duration: number, targetDuration: number) => void;
 }
 
@@ -17,6 +20,9 @@ export default function ExportMenu({
   transitions,
   playlistId,
   playlistName,
+  transitionStyle: externalStyle,
+  crossfade: externalCrossfade,
+  targetDuration: externalTargetDuration,
   onTransitionSettingsChange,
 }: ExportMenuProps) {
   const allowedTransitionStyles: TransitionConfig["style"][] = [
@@ -47,9 +53,16 @@ export default function ExportMenu({
   const [mixLog, setMixLog] = useState<Array<{ status: string; detail: string; time: number }>>([]);
   const [elapsed, setElapsed] = useState<string>("0:00");
   const [showMixSettings, setShowMixSettings] = useState(false);
-  const [crossfade, setCrossfade] = useState(8);
-  const [targetDuration, setTargetDuration] = useState(0); // 0 = no trim
-  const [transitionStyle, setTransitionStyle] = useState<string>("multiband");
+  // Use external state if provided, fallback to internal
+  const [internalCrossfade, setInternalCrossfade] = useState(8);
+  const [internalTargetDuration, setInternalTargetDuration] = useState(0);
+  const [internalTransitionStyle, setInternalTransitionStyle] = useState<string>("multiband");
+  const crossfade = externalCrossfade ?? internalCrossfade;
+  const targetDuration = externalTargetDuration ?? internalTargetDuration;
+  const transitionStyle = externalStyle ?? internalTransitionStyle;
+  const setCrossfade = (v: number) => { setInternalCrossfade(v); onTransitionSettingsChange?.(transitionStyle, v, targetDuration); };
+  const setTargetDuration = (v: number) => { setInternalTargetDuration(v); onTransitionSettingsChange?.(transitionStyle, crossfade, v); };
+  const setTransitionStyle = (v: string) => { setInternalTransitionStyle(v); onTransitionSettingsChange?.(v, crossfade, targetDuration); };
   const cancelMix = useRef<(() => void) | null>(null);
 
   // Elapsed time ticker
@@ -61,10 +74,6 @@ export default function ExportMenu({
     }, 1000);
     return () => clearInterval(iv);
   }, [loading, mixStartTime]);
-
-  useEffect(() => {
-    onTransitionSettingsChange?.(transitionStyle, crossfade, targetDuration);
-  }, [transitionStyle, crossfade, targetDuration, onTransitionSettingsChange]);
 
   const trackUris = tracks.map((t) => t.uri);
 
