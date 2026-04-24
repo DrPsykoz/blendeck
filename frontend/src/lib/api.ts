@@ -165,9 +165,12 @@ export interface AdminCachedTrackItem {
 	name: string | null;
 	artist: string | null;
 	file_name: string;
+	variant_id: string | null;
+	is_active: boolean;
 	size_bytes: number;
 	size_mb: number;
 	updated_at: number;
+	validated: boolean;
 	stream_path: string;
 }
 
@@ -245,15 +248,18 @@ export async function clearAdminCache(
 export async function deleteAdminTrackCache(
 	trackId: string,
 	source: "tracks" | "previews" | "auto" = "auto",
+	fileName?: string,
 ): Promise<{
 	track_id: string;
 	source?: "tracks" | "previews" | "auto";
+	file_name?: string;
 	deleted: boolean;
 	freed_bytes?: number;
 	freed_mb?: number;
 	message?: string;
 }> {
 	const params = new URLSearchParams({ source });
+	if (fileName) params.set("file_name", fileName);
 	return apiFetch(
 		`/api/admin/cache/tracks/${encodeURIComponent(trackId)}?${params.toString()}`,
 		{
@@ -273,13 +279,27 @@ export async function fetchAdminCachedTracks(
 	);
 }
 
+export async function validateAdminTrack(
+	trackId: string,
+	validated: boolean,
+): Promise<{ track_id: string; validated: boolean }> {
+	return apiFetch(
+		`/api/admin/cache/tracks/${encodeURIComponent(trackId)}/validate`,
+		{
+			method: validated ? "POST" : "DELETE",
+		},
+	);
+}
+
 export async function fetchAdminTrackAudioBlob(
 	trackId: string,
 	source: "tracks" | "previews" | "auto" = "auto",
+	fileName?: string,
 ): Promise<Blob> {
 	const token = await getValidToken();
 	if (!token) throw new Error("Not authenticated");
 	const params = new URLSearchParams({ source });
+	if (fileName) params.set("file_name", fileName);
 
 	const response = await fetch(
 		`${API_URL}/api/admin/cache/tracks/${encodeURIComponent(trackId)}/stream?${params.toString()}`,
@@ -296,6 +316,22 @@ export async function fetchAdminTrackAudioBlob(
 		throw new Error(detail || `API error: ${response.status}`);
 	}
 	return response.blob();
+}
+
+export async function activateAdminTrackVariant(
+	trackId: string,
+	fileName: string,
+): Promise<{
+	track_id: string;
+	file_name: string;
+	active_file_name: string;
+	success: boolean;
+}> {
+	const params = new URLSearchParams({ file_name: fileName });
+	return apiFetch(
+		`/api/admin/cache/tracks/${encodeURIComponent(trackId)}/activate?${params.toString()}`,
+		{ method: "POST" },
+	);
 }
 
 export async function searchAdminCandidates(

@@ -399,14 +399,15 @@ def search_ytmusic_candidates(artist: str, title: str, duration_ms: int = 0) -> 
 
 async def redownload_track_by_video_id(track_id: str, video_id: str) -> bool:
     """Download and cache a specific YouTube video for the given track_id.
-    
-    Replaces any existing cached track.
+
+    Saves a named variant that can later be activated by the admin.
     """
     import re as _re
     if not _re.match(r'^[a-zA-Z0-9_-]{6,20}$', video_id):
         raise ValueError(f"Invalid video_id: {video_id}")
 
-    cache_path = TRACK_CACHE_DIR / f"{_safe_track_id(track_id)}.mp3"
+    safe_track_id = _safe_track_id(track_id)
+    cache_path = TRACK_CACHE_DIR / f"{safe_track_id}__alt__{video_id}.mp3"
     loop = asyncio.get_event_loop()
     tmp_path = Path(tempfile.mkdtemp()) / "track.mp3"
 

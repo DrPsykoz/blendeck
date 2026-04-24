@@ -30,6 +30,67 @@ ROOT_METADATA_FILES = [
 ]
 MIX_HISTORY_FILE = MIXES_DIR / "history.json"
 TRACK_META_FILE = CACHE_ROOT / "track_meta.json"
+VALIDATED_TRACKS_FILE = CACHE_ROOT / "validated_tracks.json"
+ALT_TRACK_SUFFIX_RE = re.compile(r"^(?P<track_id>[A-Za-z0-9]+)__alt__(?P<variant>[A-Za-z0-9_-]{6,20})\.mp3$")
+
+
+def _load_validated() -> set[str]:
+    """Return the set of validated track IDs from the persistent store."""
+    if not VALIDATED_TRACKS_FILE.exists():
+        return set()
+    try:
+        with open(VALIDATED_TRACKS_FILE, "r") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return set(str(x) for x in data)
+    except Exception:
+        pass
+    return set()
+
+
+def _save_validated(validated: set[str]) -> None:
+    VALIDATED_TRACKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(VALIDATED_TRACKS_FILE, "w") as f:
+        json.dump(sorted(validated), f)
+
+
+def _resolve_track_file(source: str, track_id: str, file_name: str | None = None) -> Path | None:
+    base_dir = TRACKS_DIR if source == "tracks" else PREVIEWS_DIR
+    if file_name:
+        candidate = (base_dir / Path(file_name).name).resolve()
+        if candidate.parent != base_dir.resolve() or not candidate.exists() or candidate.suffix.lower() != ".mp3":
+            return None
+        if source == "tracks":
+            if candidate.stem != track_id and not candidate.name.startswith(f"{track_id}__alt__"):
+                return None
+        elif candidate.stem != track_id:
+            return None
+        return candidate
+
+    candidate = base_dir / f"{track_id}.mp3"
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def _iter_track_cache_files() -> list[tuple[str, str, str | None, bool, Path]]:
+    files: list[tuple[str, str, str | None, bool, Path]] = []
+
+    for path in TRACKS_DIR.glob("*.mp3"):
+        if not path.is_file():
+            continue
+        alt_match = ALT_TRACK_SUFFIX_RE.match(path.name)
+        if alt_match:
+            files.append(("tracks", alt_match.group("track_id"), alt_match.group("variant"), False, path))
+            continue
+        files.append(("tracks", path.stem, None, True, path))
+
+    for path in PREVIEWS_DIR.glob("*.mp3"):
+        if path.is_file():
+            files.append(("previews", path.stem, None, True, path))
+
+    files.sort(key=lambda item: item[4].stat().st_mtime, reverse=True)
+    return files
 
 
 def _extract_token(authorization: str | None) -> str:
@@ -256,22 +317,23 @@ async def admin_delete_track_cache(
     track_id: str,
     authorization: str = Header(),
     source: str = Query("auto", pattern=r"^(auto|tracks|previews)$"),
+    file_name: str | None = Query(None),
 ):
     await _require_admin(authorization)
 
     if not track_id.isalnum() or len(track_id) > 64:
         raise HTTPException(status_code=400, detail="Invalid track ID")
 
-    candidates: list[tuple[str, Path]] = []
+    candidates: list[tuple[str, Path | None]] = []
     if source in ("auto", "tracks"):
-        candidates.append(("tracks", TRACKS_DIR / f"{track_id}.mp3"))
+        candidates.append(("tracks", _resolve_track_file("tracks", track_id, file_name)))
     if source in ("auto", "previews"):
-        candidates.append(("previews", PREVIEWS_DIR / f"{track_id}.mp3"))
+        candidates.append(("previews", _resolve_track_file("previews", track_id, file_name)))
 
     file_source = None
     file_path: Path | None = None
     for candidate_source, candidate_path in candidates:
-        if candidate_path.exists():
+        if candidate_path and candidate_path.exists():
             file_source = candidate_source
             file_path = candidate_path
             break
@@ -289,6 +351,7 @@ async def admin_delete_track_cache(
     return {
         "track_id": track_id,
         "source": file_source,
+        "file_name": file_path.name,
         "deleted": True,
         "freed_bytes": size,
         "freed_mb": _bytes_to_mb(size),
@@ -304,19 +367,16 @@ async def admin_list_cached_tracks(
     await _require_admin(authorization)
 
     meta = _load_track_meta()
-    files: list[tuple[str, Path]] = []
-    files.extend(("tracks", p) for p in TRACKS_DIR.glob("*.mp3") if p.is_file())
-    files.extend(("previews", p) for p in PREVIEWS_DIR.glob("*.mp3") if p.is_file())
-    files = sorted(files, key=lambda item: item[1].stat().st_mtime, reverse=True)
+    validated = _load_validated()
+    files = _iter_track_cache_files()
 
     needle = q.strip().lower()
     items = []
-    for source, path in files:
-        track_id = path.stem
+    for source, track_id, variant_id, is_active, path in files:
         track_meta = meta.get(track_id, {}) if isinstance(meta.get(track_id), dict) else {}
         name = str(track_meta.get("name", ""))
         artist = str(track_meta.get("artist", ""))
-        search_blob = f"{track_id} {name} {artist}".lower()
+        search_blob = f"{track_id} {name} {artist} {path.name} {variant_id or ''}".lower()
         if needle and needle not in search_blob:
             continue
 
@@ -328,10 +388,13 @@ async def admin_list_cached_tracks(
                 "name": name or None,
                 "artist": artist or None,
                 "file_name": path.name,
+                "variant_id": variant_id,
+                "is_active": is_active,
                 "size_bytes": size_bytes,
                 "size_mb": _bytes_to_mb(size_bytes),
                 "updated_at": int(path.stat().st_mtime),
-                "stream_path": f"/api/admin/cache/tracks/{track_id}/stream?source={source}",
+                "validated": track_id in validated,
+                "stream_path": f"/api/admin/cache/tracks/{track_id}/stream?source={source}&file_name={path.name}",
             }
         )
         if len(items) >= limit:
@@ -344,24 +407,86 @@ async def admin_list_cached_tracks(
     }
 
 
-@router.get("/cache/tracks/{track_id}/stream")
-async def admin_stream_cached_track(
+@router.post("/cache/tracks/{track_id}/activate")
+async def admin_activate_track_variant(
     track_id: str,
     authorization: str = Header(),
-    source: str = Query("auto", pattern=r"^(auto|tracks|previews)$"),
+    file_name: str = Query(...),
 ):
     await _require_admin(authorization)
 
     if not track_id.isalnum() or len(track_id) > 64:
         raise HTTPException(status_code=400, detail="Invalid track ID")
 
-    candidates: list[Path] = []
-    if source in ("auto", "tracks"):
-        candidates.append(TRACKS_DIR / f"{track_id}.mp3")
-    if source in ("auto", "previews"):
-        candidates.append(PREVIEWS_DIR / f"{track_id}.mp3")
+    source_path = _resolve_track_file("tracks", track_id, file_name)
+    if source_path is None:
+        raise HTTPException(status_code=404, detail="Track variant not found")
 
-    file_path = next((p for p in candidates if p.exists()), None)
+    target_path = TRACKS_DIR / f"{track_id}.mp3"
+    if source_path != target_path:
+        shutil.copy2(source_path, target_path)
+
+    return {
+        "track_id": track_id,
+        "file_name": target_path.name,
+        "active_file_name": target_path.name,
+        "success": True,
+    }
+
+
+@router.post("/cache/tracks/{track_id}/validate")
+async def admin_validate_track(
+    track_id: str,
+    authorization: str = Header(),
+):
+    """Mark a cached track as validated by admin."""
+    await _require_admin(authorization)
+
+    if not track_id.isalnum() or len(track_id) > 64:
+        raise HTTPException(status_code=400, detail="Invalid track ID")
+
+    validated = _load_validated()
+    validated.add(track_id)
+    _save_validated(validated)
+    return {"track_id": track_id, "validated": True}
+
+
+@router.delete("/cache/tracks/{track_id}/validate")
+async def admin_unvalidate_track(
+    track_id: str,
+    authorization: str = Header(),
+):
+    """Remove the validated mark for a cached track."""
+    await _require_admin(authorization)
+
+    if not track_id.isalnum() or len(track_id) > 64:
+        raise HTTPException(status_code=400, detail="Invalid track ID")
+
+    validated = _load_validated()
+    validated.discard(track_id)
+    _save_validated(validated)
+    return {"track_id": track_id, "validated": False}
+
+
+@router.get("/cache/tracks/{track_id}/stream")
+async def admin_stream_cached_track(
+    track_id: str,
+    authorization: str = Header(),
+    source: str = Query("auto", pattern=r"^(auto|tracks|previews)$"),
+    file_name: str | None = Query(None),
+):
+    await _require_admin(authorization)
+
+    if not track_id.isalnum() or len(track_id) > 64:
+        raise HTTPException(status_code=400, detail="Invalid track ID")
+
+    candidates: list[Path | None] = []
+    if source in ("auto", "tracks"):
+        candidates.append(_resolve_track_file("tracks", track_id, file_name))
+    if source in ("auto", "previews"):
+        candidates.append(_resolve_track_file("previews", track_id, file_name))
+
+    file_path = next((p for p in candidates if p and p.exists()), None)
     if file_path is None:
         raise HTTPException(status_code=404, detail="Track cache file not found")
 
