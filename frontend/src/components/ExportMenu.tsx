@@ -9,6 +9,7 @@ interface ExportMenuProps {
   transitions: TransitionScore[];
   playlistId: string;
   playlistName: string;
+  onTransitionSettingsChange?: (style: string, duration: number, targetDuration: number) => void;
 }
 
 export default function ExportMenu({
@@ -16,7 +17,26 @@ export default function ExportMenu({
   transitions,
   playlistId,
   playlistName,
+  onTransitionSettingsChange,
 }: ExportMenuProps) {
+  const allowedTransitionStyles: TransitionConfig["style"][] = [
+    "auto",
+    "crossfade",
+    "multiband",
+    "superpose",
+    "fade",
+    "cut",
+    "echo",
+    "beatmatch",
+  ];
+
+  const toTransitionStyle = (style?: string): TransitionConfig["style"] => {
+    if (!style) return "multiband";
+    return allowedTransitionStyles.includes(style as TransitionConfig["style"])
+      ? (style as TransitionConfig["style"])
+      : "multiband";
+  };
+
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -29,7 +49,7 @@ export default function ExportMenu({
   const [showMixSettings, setShowMixSettings] = useState(false);
   const [crossfade, setCrossfade] = useState(8);
   const [targetDuration, setTargetDuration] = useState(0); // 0 = no trim
-  const [transitionStyle, setTransitionStyle] = useState<string>("crossfade");
+  const [transitionStyle, setTransitionStyle] = useState<string>("multiband");
   const cancelMix = useRef<(() => void) | null>(null);
 
   // Elapsed time ticker
@@ -41,6 +61,10 @@ export default function ExportMenu({
     }, 1000);
     return () => clearInterval(iv);
   }, [loading, mixStartTime]);
+
+  useEffect(() => {
+    onTransitionSettingsChange?.(transitionStyle, crossfade, targetDuration);
+  }, [transitionStyle, crossfade, targetDuration, onTransitionSettingsChange]);
 
   const trackUris = tracks.map((t) => t.uri);
 
@@ -103,6 +127,10 @@ export default function ExportMenu({
       artist: t.artists.join(", "),
       duration_ms: t.duration_ms,
     }));
+    const mixTransitions: TransitionConfig[] = transitions.map((transition) => ({
+      style: toTransitionStyle(transition.style || transitionStyle),
+      duration: transition.duration || crossfade,
+    }));
 
     cancelMix.current = generateMix(mixTracks, crossfade, {
       onStart: () => {},
@@ -134,7 +162,7 @@ export default function ExportMenu({
         setMixProgress(null);
         setMixPhase("");
       },
-    }, targetDuration, transitionStyle, undefined, playlistId);
+    }, targetDuration, transitionStyle, mixTransitions, playlistId);
   };
 
   const handleDownloadMix = () => {
@@ -287,6 +315,8 @@ export default function ExportMenu({
               <div className="grid grid-cols-3 gap-1.5">
                 {([
                   { value: "crossfade", label: "Crossfade", desc: "Fondu croisé linéaire" },
+                  { value: "multiband", label: "3 bandes", desc: "Transition DJ type EQ (bass/mid/high)" },
+                  { value: "superpose", label: "Superpose", desc: "Superposition franche des deux pistes" },
                   { value: "fade", label: "Fade", desc: "Fondu sortie/entrée progressif" },
                   { value: "cut", label: "Cut", desc: "Enchaînement direct" },
                   { value: "echo", label: "Echo", desc: "Queue réverbérée" },
@@ -312,6 +342,10 @@ export default function ExportMenu({
                   ? "Analyse le BPM et l'énergie pour choisir le meilleur style"
                   : transitionStyle === "crossfade"
                   ? "Fondu croisé classique entre les pistes"
+                  : transitionStyle === "multiband"
+                  ? "Mix DJ sur 3 bandes: bass, medium, high"
+                  : transitionStyle === "superpose"
+                  ? "Superpose les deux pistes sans atténuation"
                   : transitionStyle === "fade"
                   ? "La piste s'efface puis la suivante monte"
                   : transitionStyle === "cut"
@@ -322,11 +356,57 @@ export default function ExportMenu({
               </p>
             </div>
 
-            {targetDuration > 0 && (
-              <div className="mb-3 rounded-lg bg-deck-surface px-3 py-2 text-xs text-sand-300">
-                Durée estimée : ~{Math.round((tracks.length * targetDuration - (tracks.length - 1) * crossfade) / 60)} min
-              </div>
-            )}
+            {(() => {
+              const durPerTrack = (t: Track) =>
+                targetDuration > 0 ? targetDuration : t.duration_ms / 1000;
+              const totalDurS = Math.max(
+                0,
+                tracks.reduce((s, t) => s + durPerTrack(t), 0) -
+                  (tracks.length - 1) * crossfade,
+              );
+              const cachedTracks = tracks.filter((t) => t.audio_cached);
+              const uncachedTracks = tracks.filter((t) => !t.audio_cached);
+              const cachedDurS = cachedTracks.reduce(
+                (s, t) => s + durPerTrack(t),
+                0,
+              );
+              const uncachedDurS = uncachedTracks.reduce(
+                (s, t) => s + durPerTrack(t),
+                0,
+              );
+              const fmtMin = (s: number) =>
+                s >= 60
+                  ? `${Math.floor(s / 60)}m${String(Math.round(s % 60)).padStart(2, "0")}s`
+                  : `${Math.round(s)}s`;
+              return (
+                <div className="mb-3 space-y-1 rounded-lg bg-deck-surface px-3 py-2 text-[11px]">
+                  <div className="flex items-center justify-between text-sand-300">
+                    <span>Durée estimée du mix</span>
+                    <span className="font-mono text-amber">
+                      ~{fmtMin(totalDurS)}
+                    </span>
+                  </div>
+                  {cachedTracks.length > 0 && (
+                    <div className="flex items-center justify-between text-emerald-400">
+                      <span>
+                        ✓ Déjà en cache ({cachedTracks.length} piste
+                        {cachedTracks.length > 1 ? "s" : ""})
+                      </span>
+                      <span className="font-mono">~{fmtMin(cachedDurS)}</span>
+                    </div>
+                  )}
+                  {uncachedTracks.length > 0 && (
+                    <div className="flex items-center justify-between text-yellow-400">
+                      <span>
+                        ⬇ À télécharger ({uncachedTracks.length} piste
+                        {uncachedTracks.length > 1 ? "s" : ""})
+                      </span>
+                      <span className="font-mono">~{fmtMin(uncachedDurS)}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             <button
               onClick={handleMix}

@@ -95,6 +95,15 @@ export interface TransitionScore {
 	energy_score: number;
 	danceability_score: number;
 	year_score: number;
+	style?: string;
+	duration?: number;
+}
+
+export interface TransitionOverride {
+	from_track_id: string;
+	to_track_id: string;
+	style: string;
+	duration?: number;
 }
 
 export interface GeneratedSet {
@@ -520,6 +529,25 @@ export async function exportFile(
 	return response.blob();
 }
 
+export async function previewTransitions(
+	tracks: Track[],
+	transitionStyle: string = "multiband",
+	transitionDuration: number = 8,
+	energyCurve: string = "arc",
+	overrides: TransitionOverride[] = [],
+): Promise<TransitionScore[]> {
+	return apiFetch<TransitionScore[]>("/api/export/transitions", {
+		method: "POST",
+		body: JSON.stringify({
+			tracks,
+			transition_style: transitionStyle,
+			transition_duration: transitionDuration,
+			energy_curve: energyCurve,
+			transitions: overrides,
+		}),
+	});
+}
+
 // Mix generation
 export interface MixProgress {
 	status:
@@ -545,7 +573,15 @@ export interface MixCallbacks {
 }
 
 export interface TransitionConfig {
-	style: "crossfade" | "fade" | "cut" | "echo" | "beatmatch" | "auto";
+	style:
+		| "crossfade"
+		| "fade"
+		| "cut"
+		| "echo"
+		| "beatmatch"
+		| "superpose"
+		| "multiband"
+		| "auto";
 	duration: number;
 }
 
@@ -554,7 +590,7 @@ export function generateMix(
 	crossfade: number,
 	callbacks: MixCallbacks,
 	targetDuration: number = 0,
-	transitionStyle: string = "crossfade",
+	transitionStyle: string = "multiband",
 	transitions?: TransitionConfig[],
 	playlistId: string = "",
 ): () => void {
@@ -695,8 +731,10 @@ export async function loadTransitionPreview(
 	fromArtist: string,
 	toName: string,
 	toArtist: string,
-	style: string = "crossfade",
+	style: string = "multiband",
 	duration: number = 8,
+	targetDuration: number = 0,
+	fromIsFirst: boolean = false,
 ): Promise<string> {
 	const token = await getValidToken();
 	if (!token) throw new Error("Not authenticated");
@@ -709,6 +747,8 @@ export async function loadTransitionPreview(
 		to_artist: toArtist,
 		style,
 		duration: String(duration),
+		target_duration: String(targetDuration),
+		from_is_first: String(fromIsFirst),
 	});
 	const res = await fetch(
 		`${API_URL}/api/export/transition-preview?${params}`,

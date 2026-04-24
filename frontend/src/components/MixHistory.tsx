@@ -22,6 +22,8 @@ function formatDate(ts: number): string {
 
 const STYLE_LABELS: Record<string, string> = {
   crossfade: "Crossfade",
+  multiband: "3 bandes",
+  superpose: "Superpose",
   fade: "Fade",
   cut: "Cut",
   echo: "Echo",
