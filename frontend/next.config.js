@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+    swcMinify: true,
+    productionBrowserSourceMaps: false,
     images: {
         remotePatterns: [
             { protocol: "https", hostname: "i.scdn.co" },
