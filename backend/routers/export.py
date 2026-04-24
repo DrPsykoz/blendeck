@@ -157,9 +157,9 @@ async def export_mix(req: MixRequest, authorization: str = Header()):
 
     # Enrich track dicts with BPM from features cache for beat-aware crossfade duration
     def _get_track_bpm(track_id: str) -> float:
-        features = features_cache.get_audio_features(track_id)
+        features = features_cache.get_cached(track_id)
         if features:
-            return float(features.get("tempo", 0) or features.get("bpm", 0) or 0)
+            return float(getattr(features, "tempo", 0) or 0)
         return 0.0
 
     track_dicts = [

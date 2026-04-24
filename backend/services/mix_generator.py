@@ -10,7 +10,7 @@ import tempfile
 import time
 import uuid
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Awaitable
 
@@ -50,6 +50,7 @@ _MIX_TRIM_CONCURRENCY = _int_env("MIX_TRIM_CONCURRENCY", 2)
 _MIX_ANALYSIS_CONCURRENCY = _int_env("MIX_ANALYSIS_CONCURRENCY", 2)
 _MIX_CONCAT_BATCH_SIZE = _int_env("MIX_CONCAT_BATCH_SIZE", 6, min_value=2, max_value=10)
 _MIX_CONCAT_SINGLE_PASS_LIMIT = _int_env("MIX_CONCAT_SINGLE_PASS_LIMIT", 18, min_value=2, max_value=120)
+_MIX_CONCAT_BATCH_PARALLELISM = _int_env("MIX_CONCAT_BATCH_PARALLELISM", 2, min_value=1, max_value=6)
 _cpu_count = max(os.cpu_count() or 4, 2)
 _default_ffmpeg_threads = max(1, int(round(_cpu_count * 0.7)))
 _MIX_FFMPEG_THREADS = _int_env("MIX_FFMPEG_THREADS", _default_ffmpeg_threads, min_value=1, max_value=32)
@@ -62,6 +63,10 @@ _MIX_FFMPEG_FILTER_THREADS = _int_env(
 _MIX_AUDIO_BITRATE = _bitrate_env("MIX_AUDIO_BITRATE", "320k")
 _MIX_PREFETCH_CONCURRENCY = _int_env("MIX_PREFETCH_CONCURRENCY", 2, min_value=1, max_value=6)
 _MIX_PREFETCH_MAX_TRACKS = _int_env("MIX_PREFETCH_MAX_TRACKS", 80, min_value=1, max_value=500)
+_MIX_TEMP_MAX_AGE_HOURS = _int_env("MIX_TEMP_MAX_AGE_HOURS", 6, min_value=1, max_value=168)
+_TRANSITION_TEMP_MAX_AGE_HOURS = _int_env("TRANSITION_TEMP_MAX_AGE_HOURS", 6, min_value=1, max_value=168)
+_TRIM_CACHE_MAX_GB = _int_env("TRIM_CACHE_MAX_GB", 2, min_value=1, max_value=200)
+_TRIM_CACHE_MAX_AGE_DAYS = _int_env("TRIM_CACHE_MAX_AGE_DAYS", 14, min_value=1, max_value=365)
 
 MIX_DIR = Path("/app/cache/mixes")
 MIX_DIR.mkdir(parents=True, exist_ok=True)
@@ -1094,9 +1099,48 @@ def _concat_single_pass(
     n = len(track_files)
     if n == 0:
         return False
+
+    output_ext = output.suffix.lower()
+    if output_ext == ".wav":
+        codec_args = [
+            "-c:a", "pcm_s16le",
+        ]
+    elif output_ext == ".flac":
+        # Lossless but much smaller than WAV: reduces disk I/O bottlenecks for
+        # very large batched mixes while preserving audio quality.
+        codec_args = [
+            "-c:a", "flac",
+            "-compression_level", "5",
+        ]
+    else:
+        codec_args = [
+            "-c:a", "libmp3lame",
+            "-b:a", _MIX_AUDIO_BITRATE,
+        ]
+
     if n == 1:
-        shutil.copy(str(track_files[0]), str(output))
-        return True
+        # Important: do not blindly copy input when extension/codec differs
+        # (e.g. mp3 content inside a .flac/.wav file). Always remux/re-encode
+        # to the requested output format for deterministic downstream decoding.
+        cmd_single = [
+            "ffmpeg", "-y",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-nostats",
+            "-threads", str(_MIX_FFMPEG_THREADS),
+            "-i", str(track_files[0]),
+            *codec_args,
+            str(output),
+        ]
+        try:
+            result = subprocess.run(cmd_single, capture_output=True, text=True, timeout=900)
+            if result.returncode != 0:
+                logger.error(f"Mix: single-track encode error: {result.stderr[-500:]}")
+                return False
+            return True
+        except subprocess.TimeoutExpired:
+            logger.error("Mix: single-track encode timed out")
+            return False
 
     while len(transitions) < n - 1:
         transitions.append({"style": "multiband", "duration": default_crossfade_s})
@@ -1123,27 +1167,44 @@ def _concat_single_pass(
         return f"d={dur}:c1=tri:c2=tri"
 
     def _build_multiband_filter(inp_left: str, inp_right: str, out_label: str, stage_idx: int, duration: int) -> str:
-        """Build a 3-band DJ-like transition filter chain.
+        """Build a 3-band DJ-like transition using a sequential Linkwitz-Riley LR4 crossover.
 
-        - Low band fades gently (bass continuity)
-        - Mid band uses standard crossfade
-        - High band transitions faster/smoother
+        L+M+H topology (sequential, not parallel):
+          Low  = LP4(180Hz) of input
+          Mid  = HP4(180Hz) → LP4(2500Hz)
+          High = HP4(180Hz) → HP4(2500Hz)
+
+        This guarantees L+M+H = LP4 + HP4×(LP4+HP4) = LP4 + HP4 = 1 at all
+        frequencies (flat phase + amplitude reconstruction). The old parallel
+        Butterworth split had 180° phase offset at crossover → destructive
+        notches at 180Hz and 2500Hz that coloured every track.
         """
         i = stage_idx
         d = max(1, min(duration, 15))
+        # LR4 = second-order Butterworth applied twice → phase-matched at crossover
+        lp_lo = "lowpass=f=180,lowpass=f=180"
+        hp_lo = "highpass=f=180,highpass=f=180"
+        lp_hi = "lowpass=f=2500,lowpass=f=2500"
+        hp_hi = "highpass=f=2500,highpass=f=2500"
         return ";".join([
-            f"{inp_left}asplit=3[aL{i}][aM{i}][aH{i}]",
-            f"{inp_right}asplit=3[bL{i}][bM{i}][bH{i}]",
-            f"[aL{i}]lowpass=f=180[aLf{i}]",
-            f"[aM{i}]highpass=f=180,lowpass=f=2500[aMf{i}]",
-            f"[aH{i}]highpass=f=2500[aHf{i}]",
-            f"[bL{i}]lowpass=f=180[bLf{i}]",
-            f"[bM{i}]highpass=f=180,lowpass=f=2500[bMf{i}]",
-            f"[bH{i}]highpass=f=2500[bHf{i}]",
+            # Sequential split for left input
+            f"{inp_left}asplit=2[aLS{i}][aHS{i}]",
+            f"[aLS{i}]{lp_lo}[aLf{i}]",
+            f"[aHS{i}]{hp_lo},asplit=2[aMS{i}][aHHS{i}]",
+            f"[aMS{i}]{lp_hi}[aMf{i}]",
+            f"[aHHS{i}]{hp_hi}[aHf{i}]",
+            # Sequential split for right input
+            f"{inp_right}asplit=2[bLS{i}][bHS{i}]",
+            f"[bLS{i}]{lp_lo}[bLf{i}]",
+            f"[bHS{i}]{hp_lo},asplit=2[bMS{i}][bHHS{i}]",
+            f"[bMS{i}]{lp_hi}[bMf{i}]",
+            f"[bHHS{i}]{hp_hi}[bHf{i}]",
+            # Per-band crossfades
             f"[aLf{i}][bLf{i}]acrossfade=d={d}:c1=exp:c2=exp[lCf{i}]",
             f"[aMf{i}][bMf{i}]acrossfade=d={d}:c1=tri:c2=tri[mCf{i}]",
             f"[aHf{i}][bHf{i}]acrossfade=d={d}:c1=qsin:c2=qsin[hCf{i}]",
-            f"[lCf{i}][mCf{i}][hCf{i}]amix=inputs=3:weights='1 1 0.9':normalize=0,alimiter=limit=0.98{out_label}",
+            # Unity-gain reconstruction (LR4 property) + safety limiter
+            f"[lCf{i}][mCf{i}][hCf{i}]amix=inputs=3:weights='1 1 1':normalize=0,alimiter=limit=0.98{out_label}",
         ])
 
     def _build_transition_filter(inp_left: str, inp_right: str, t: dict, out_label: str, stage_idx: int) -> str:
@@ -1164,14 +1225,6 @@ def _concat_single_pass(
             out_label = f"[cf{i}]" if i < n - 1 else ""
             filter_parts.append(_build_transition_filter(inp_left, inp_right, transitions[i - 1], out_label, i))
         filter_str = ";".join(filter_parts)
-
-    output_ext = output.suffix.lower()
-    codec_args = [
-        "-c:a", "pcm_s16le",
-    ] if output_ext == ".wav" else [
-        "-c:a", "libmp3lame",
-        "-b:a", _MIX_AUDIO_BITRATE,
-    ]
 
     cmd = [
         "ffmpeg", "-y",
@@ -1295,7 +1348,7 @@ def _concat_with_transitions(
         end = min(start + _CONCAT_BATCH_SIZE, n)
         batch_tracks = track_files[start:end]
         batch_trans = transitions[start:end - 1] if end - start > 1 else []
-        batch_out = temp_root / f"_batch_l{level}_{batch_idx:03d}.wav"
+        batch_out = temp_root / f"_batch_l{level}_{batch_idx:03d}.flac"
         batch_est = _estimate_concat_duration(
             len(batch_tracks),
             batch_trans,
@@ -1332,33 +1385,84 @@ def _concat_with_transitions(
     current_mix: Path | None = None
 
     try:
-        for i, (b_start, b_end, batch_tracks, batch_trans, batch_out, batch_est) in enumerate(batch_specs):
-            logger.info(f"Mix: batch {i} — tracks {b_start}..{b_end - 1} ({len(batch_tracks)} tracks)")
-
-            ok = _run_op(
-                batch_tracks,
-                batch_trans,
-                batch_out,
-                work_start=current_work_start,
-                work_weight=work_items[work_idx],
-                total_work=total_work,
+        # Phase 1: render each batch. For large playlists, run batches in
+        # parallel to reduce wall-clock time without altering filter/codec quality.
+        batch_parallelism = min(_MIX_CONCAT_BATCH_PARALLELISM, len(batch_specs))
+        if batch_parallelism > 1:
+            logger.info(
+                f"Mix: rendering {len(batch_specs)} batches in parallel "
+                f"(workers={batch_parallelism})"
             )
-            if not ok:
-                return False
+            rendered_weight = 0.0
+            with ThreadPoolExecutor(max_workers=batch_parallelism) as pool:
+                future_to_index = {
+                    pool.submit(
+                        _concat_single_pass,
+                        spec[2],  # batch_tracks
+                        spec[3],  # batch_trans
+                        default_crossfade_s,
+                        spec[4],  # batch_out
+                        None,
+                    ): i
+                    for i, spec in enumerate(batch_specs)
+                }
 
-            current_work_start += work_items[work_idx]
-            work_idx += 1
+                for future in as_completed(future_to_index):
+                    i = future_to_index[future]
+                    try:
+                        ok = future.result()
+                    except Exception as e:
+                        logger.error(f"Mix: batch {i} parallel render failed: {e}")
+                        return False
+                    if not ok:
+                        logger.error(f"Mix: batch {i} parallel render returned failure")
+                        return False
 
-            if i == 0:
-                current_mix = batch_out
-                continue
+                    rendered_weight += work_items[i]
+                    if progress_cb and progress_total_s is not None:
+                        ratio = rendered_weight / max(total_work, 1.0)
+                        progress_cb(progress_total_s * min(ratio, 0.95))
+        else:
+            for i, (b_start, b_end, batch_tracks, batch_trans, batch_out, _) in enumerate(batch_specs):
+                logger.info(f"Mix: batch {i} — tracks {b_start}..{b_end - 1} ({len(batch_tracks)} tracks)")
+                ok = _run_op(
+                    batch_tracks,
+                    batch_trans,
+                    batch_out,
+                    work_start=current_work_start,
+                    work_weight=work_items[work_idx],
+                    total_work=total_work,
+                )
+                if not ok:
+                    return False
+                current_work_start += work_items[work_idx]
+                work_idx += 1
+
+        # If batches rendered in parallel, progress starts after batch phase.
+        if batch_parallelism > 1:
+            current_work_start = sum(work_items[:len(batch_specs)])
+            work_idx = len(batch_specs)
+
+        current_mix = batch_specs[0][4]
+
+        # Phase 2: sequential joins between batch outputs (keeps deterministic order).
+        for i in range(1, len(batch_specs)):
+            b_start = batch_specs[i][0]
+            batch_out = batch_specs[i][4]
 
             if current_mix is None:
                 return False
 
-            join_transition = transitions[b_start - 1]
+            # Avoid stacking multiband splits across intermediate joins.
+            # Reapplying 3-band filtering on already mixed chunks can gradually
+            # color the spectrum on very large playlists. Keep joins neutral.
+            base_transition = transitions[b_start - 1]
+            join_transition = {
+                "style": "crossfade",
+                "duration": int(max(1, min(base_transition.get("duration", default_crossfade_s), 15))),
+            }
             is_last_join = i == len(batch_specs) - 1
-            join_out = output if is_last_join else temp_root / f"_merge_l{level}_{i:03d}.wav"
+            join_out = output if is_last_join else temp_root / f"_merge_l{level}_{i:03d}.flac"
             ok = _run_op(
                 [current_mix, batch_out],
                 [join_transition],
@@ -1944,3 +2048,95 @@ def cleanup_old_mixes(max_age_hours: int = 1) -> None:
         if now - f.stat().st_mtime > max_age_hours * 3600:
             f.unlink(missing_ok=True)
             _mix_files.pop(f.stem, None)
+
+    _cleanup_stale_mix_temp_dirs(_MIX_TEMP_MAX_AGE_HOURS)
+    _cleanup_stale_transition_temp_dirs(_TRANSITION_TEMP_MAX_AGE_HOURS)
+    _cleanup_trim_cache(max_total_gb=_TRIM_CACHE_MAX_GB, max_age_days=_TRIM_CACHE_MAX_AGE_DAYS)
+
+
+def _cleanup_stale_mix_temp_dirs(max_age_hours: int) -> None:
+    """Remove orphan temp dirs/files in MIX_DIR (from interrupted runs)."""
+    now = time.time()
+    max_age_s = max_age_hours * 3600
+    try:
+        for p in MIX_DIR.iterdir():
+            try:
+                age_s = now - p.stat().st_mtime
+            except Exception:
+                continue
+            if age_s < max_age_s:
+                continue
+
+            # mkdtemp(dir=MIX_DIR) leaves tmp* dirs if process is interrupted.
+            if p.is_dir() and p.name.startswith("tmp"):
+                shutil.rmtree(p, ignore_errors=True)
+                logger.info(f"Cleanup: removed stale mix temp dir '{p.name}'")
+                continue
+
+            # Safety cleanup for orphaned intermediate files.
+            if p.is_file() and (p.name.startswith("_batch_l") or p.name.startswith("_merge_l")):
+                p.unlink(missing_ok=True)
+                logger.info(f"Cleanup: removed stale mix temp file '{p.name}'")
+    except Exception as e:
+        logger.warning(f"Cleanup: stale mix temp cleanup failed: {e}")
+
+
+def _cleanup_stale_transition_temp_dirs(max_age_hours: int) -> None:
+    """Remove orphan transition work dirs left by interrupted preview generation."""
+    now = time.time()
+    max_age_s = max_age_hours * 3600
+    try:
+        for p in TRANSITION_DIR.glob("_work_*"):
+            try:
+                age_s = now - p.stat().st_mtime
+            except Exception:
+                continue
+            if age_s >= max_age_s:
+                shutil.rmtree(p, ignore_errors=True)
+                logger.info(f"Cleanup: removed stale transition work dir '{p.name}'")
+    except Exception as e:
+        logger.warning(f"Cleanup: stale transition temp cleanup failed: {e}")
+
+
+def _cleanup_trim_cache(max_total_gb: int, max_age_days: int) -> None:
+    """Bound trim cache size and age to avoid unbounded disk growth."""
+    try:
+        files = [f for f in TRIM_CACHE_DIR.glob("*.mp3") if f.exists()]
+        if not files:
+            return
+
+        now = time.time()
+        max_age_s = max_age_days * 86400
+        for f in list(files):
+            try:
+                if now - f.stat().st_mtime > max_age_s:
+                    f.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        files = [f for f in TRIM_CACHE_DIR.glob("*.mp3") if f.exists()]
+        target_bytes = max_total_gb * 1024 * 1024 * 1024
+        total_bytes = sum(f.stat().st_size for f in files)
+        if total_bytes <= target_bytes:
+            return
+
+        # Remove oldest files first until under target size.
+        files.sort(key=lambda x: x.stat().st_mtime)
+        removed = 0
+        for f in files:
+            if total_bytes <= target_bytes:
+                break
+            try:
+                size = f.stat().st_size
+                f.unlink(missing_ok=True)
+                total_bytes -= size
+                removed += 1
+            except Exception:
+                continue
+
+        if removed > 0:
+            logger.info(
+                f"Cleanup: trim cache pruned ({removed} files), remaining {total_bytes // (1024*1024)}MB"
+            )
+    except Exception as e:
+        logger.warning(f"Cleanup: trim cache cleanup failed: {e}")

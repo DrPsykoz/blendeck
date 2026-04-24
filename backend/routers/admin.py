@@ -20,6 +20,7 @@ TRACKS_DIR = CACHE_ROOT / "tracks"
 PREVIEWS_DIR = CACHE_ROOT / "previews"
 MIXES_DIR = CACHE_ROOT / "mixes"
 TRANSITIONS_DIR = CACHE_ROOT / "transitions"
+TRIMMED_DIR = CACHE_ROOT / "trimmed"
 
 ROOT_METADATA_FILES = [
     CACHE_ROOT / "audio_features.json",
@@ -173,20 +174,29 @@ def _delete_metadata_files() -> dict:
 async def admin_cache_overview(authorization: str = Header()):
     user = await _require_admin(authorization)
     tracks = _dir_stats(TRACKS_DIR)
+    previews = _dir_stats(PREVIEWS_DIR)
     mixes = _dir_stats(MIXES_DIR)
     transitions = _dir_stats(TRANSITIONS_DIR)
+    trimmed = _dir_stats(TRIMMED_DIR)
     metadata = _metadata_stats()
 
     total_bytes = (
-        tracks["size_bytes"] + mixes["size_bytes"] + transitions["size_bytes"] + metadata["size_bytes"]
+        tracks["size_bytes"]
+        + previews["size_bytes"]
+        + mixes["size_bytes"]
+        + transitions["size_bytes"]
+        + trimmed["size_bytes"]
+        + metadata["size_bytes"]
     )
 
     return {
         "admin_email": user.get("email"),
         "cache_root": str(CACHE_ROOT),
         "tracks": tracks,
+        "previews": previews,
         "mixes": mixes,
         "transitions": transitions,
+        "trimmed": trimmed,
         "metadata": metadata,
         "total": {
             "size_bytes": total_bytes,
@@ -198,31 +208,39 @@ async def admin_cache_overview(authorization: str = Header()):
 @router.delete("/cache")
 async def admin_clear_cache(
     authorization: str = Header(),
-    scope: str = Query("all", pattern=r"^(tracks|mixes|transitions|metadata|all)$"),
+    scope: str = Query("all", pattern=r"^(tracks|previews|mixes|transitions|trimmed|metadata|all)$"),
 ):
     await _require_admin(authorization)
 
     result = {
         "scope": scope,
         "tracks": {"deleted_files": 0, "freed_bytes": 0, "freed_mb": 0.0},
+        "previews": {"deleted_files": 0, "freed_bytes": 0, "freed_mb": 0.0},
         "mixes": {"deleted_files": 0, "freed_bytes": 0, "freed_mb": 0.0},
         "transitions": {"deleted_files": 0, "freed_bytes": 0, "freed_mb": 0.0},
+        "trimmed": {"deleted_files": 0, "freed_bytes": 0, "freed_mb": 0.0},
         "metadata": {"deleted_files": 0, "freed_bytes": 0, "freed_mb": 0.0},
     }
 
     if scope in ("tracks", "all"):
         result["tracks"] = _delete_dir_contents(TRACKS_DIR)
+    if scope in ("previews", "all"):
+        result["previews"] = _delete_dir_contents(PREVIEWS_DIR)
     if scope in ("mixes", "all"):
         result["mixes"] = _delete_dir_contents(MIXES_DIR)
     if scope in ("transitions", "all"):
         result["transitions"] = _delete_dir_contents(TRANSITIONS_DIR)
+    if scope in ("trimmed", "all"):
+        result["trimmed"] = _delete_dir_contents(TRIMMED_DIR)
     if scope in ("metadata", "all"):
         result["metadata"] = _delete_metadata_files()
 
     total_freed = (
         result["tracks"]["freed_bytes"]
+        + result["previews"]["freed_bytes"]
         + result["mixes"]["freed_bytes"]
         + result["transitions"]["freed_bytes"]
+        + result["trimmed"]["freed_bytes"]
         + result["metadata"]["freed_bytes"]
     )
     result["total"] = {

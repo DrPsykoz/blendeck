@@ -54,7 +54,7 @@ export default function AdminPage() {
   });
 
   const clearMutation = useMutation({
-    mutationFn: (scope: "tracks" | "mixes" | "transitions" | "metadata" | "all") =>
+    mutationFn: (scope: "tracks" | "previews" | "mixes" | "transitions" | "trimmed" | "metadata" | "all") =>
       clearAdminCache(scope),
     onSuccess: () => {
       overviewQuery.refetch();
@@ -227,9 +227,22 @@ export default function AdminPage() {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {[
               { key: "tracks", label: "Pistes", files: data.tracks.files, mb: data.tracks.size_mb },
+              { key: "previews", label: "Previews", files: data.previews.files, mb: data.previews.size_mb },
               { key: "mixes", label: "Mix", files: data.mixes.files, mb: data.mixes.size_mb },
               { key: "transitions", label: "Transitions", files: data.transitions.files, mb: data.transitions.size_mb },
-              { key: "total", label: "Total", files: data.tracks.files + data.mixes.files + data.transitions.files + data.metadata.files, mb: data.total.size_mb },
+              { key: "trimmed", label: "Trimmed", files: data.trimmed.files, mb: data.trimmed.size_mb },
+              {
+                key: "total",
+                label: "Total",
+                files:
+                  data.tracks.files +
+                  data.previews.files +
+                  data.mixes.files +
+                  data.transitions.files +
+                  data.trimmed.files +
+                  data.metadata.files,
+                mb: data.total.size_mb,
+              },
             ].map((item) => (
               <div key={item.key} className="rounded-xl border border-deck-border bg-deck-card px-4 py-3">
                 <p className="text-xs uppercase tracking-wide text-sand-400">{item.label}</p>
@@ -247,14 +260,16 @@ export default function AdminPage() {
             <div className="flex flex-wrap gap-2">
               {[
                 { scope: "tracks", label: "Vider pistes" },
+                { scope: "previews", label: "Vider previews" },
                 { scope: "mixes", label: "Vider mix" },
                 { scope: "transitions", label: "Vider transitions" },
+                { scope: "trimmed", label: "Vider trimmed" },
                 { scope: "metadata", label: "Vider métadonnées" },
                 { scope: "all", label: "Tout vider" },
               ].map((btn) => (
                 <button
                   key={btn.scope}
-                  onClick={() => clearMutation.mutate(btn.scope as "tracks" | "mixes" | "transitions" | "metadata" | "all")}
+                  onClick={() => clearMutation.mutate(btn.scope as "tracks" | "previews" | "mixes" | "transitions" | "trimmed" | "metadata" | "all")}
                   disabled={clearMutation.isPending}
                   className="inline-flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300 hover:bg-red-500/15 disabled:opacity-60"
                 >

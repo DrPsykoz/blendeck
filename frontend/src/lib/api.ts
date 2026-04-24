@@ -140,8 +140,10 @@ export interface AdminCacheOverview {
 	admin_email: string;
 	cache_root: string;
 	tracks: AdminCacheSection;
+	previews: AdminCacheSection;
 	mixes: AdminCacheSection;
 	transitions: AdminCacheSection;
+	trimmed: AdminCacheSection;
 	metadata: AdminCacheSection;
 	total: {
 		size_bytes: number;
@@ -226,7 +228,14 @@ export async function fetchAdminCacheOverview(): Promise<AdminCacheOverview> {
 }
 
 export async function clearAdminCache(
-	scope: "tracks" | "mixes" | "transitions" | "metadata" | "all",
+	scope:
+		| "tracks"
+		| "previews"
+		| "mixes"
+		| "transitions"
+		| "trimmed"
+		| "metadata"
+		| "all",
 ): Promise<AdminCacheClearResult> {
 	return apiFetch<AdminCacheClearResult>(`/api/admin/cache?scope=${scope}`, {
 		method: "DELETE",

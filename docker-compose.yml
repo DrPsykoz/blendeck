@@ -43,3 +43,4 @@ services:
 
 volumes:
   audio-cache:
+    name: blendeck_audio_cache
