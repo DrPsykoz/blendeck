@@ -57,6 +57,18 @@ class TransitionScore(BaseModel):
     year_score: float = 0.0
 
 
+class TransitionPreview(TransitionScore):
+    style: str = "multiband"
+    duration: int = 8
+
+
+class TransitionOverride(BaseModel):
+    from_track_id: str
+    to_track_id: str
+    style: str = "multiband"
+    duration: int | None = None
+
+
 class PlaylistSummary(BaseModel):
     id: str
     name: str
@@ -106,3 +118,11 @@ class ExportFileRequest(BaseModel):
     tracks: list[Track]
     transitions: list[TransitionScore] = []
     format: str = "csv"  # "csv" or "json"
+
+
+class PreviewTransitionsRequest(BaseModel):
+    tracks: list[Track]
+    transition_style: str = "multiband"
+    transition_duration: int = 8
+    energy_curve: str = "arc"
+    transitions: list[TransitionOverride] = []

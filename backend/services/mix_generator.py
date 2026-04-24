@@ -36,10 +36,30 @@ def _int_env(name: str, default: int, min_value: int = 1, max_value: int = 8) ->
     return max(min_value, min(max_value, value))
 
 
+def _bitrate_env(name: str, default: str = "320k") -> str:
+    """Read a safe audio bitrate value like 192k/256k/320k."""
+    raw = (os.getenv(name) or default).strip().lower()
+    if re.fullmatch(r"[1-9][0-9]{1,3}k", raw):
+        return raw
+    logger.warning(f"Mix: invalid bitrate for {name}='{raw}', using {default}")
+    return default
+
+
 _MIX_DOWNLOAD_CONCURRENCY = _int_env("MIX_DOWNLOAD_CONCURRENCY", 3)
 _MIX_TRIM_CONCURRENCY = _int_env("MIX_TRIM_CONCURRENCY", 2)
 _MIX_ANALYSIS_CONCURRENCY = _int_env("MIX_ANALYSIS_CONCURRENCY", 2)
-_MIX_CONCAT_BATCH_SIZE = _int_env("MIX_CONCAT_BATCH_SIZE", 2, min_value=2, max_value=10)
+_MIX_CONCAT_BATCH_SIZE = _int_env("MIX_CONCAT_BATCH_SIZE", 6, min_value=2, max_value=10)
+_MIX_CONCAT_SINGLE_PASS_LIMIT = _int_env("MIX_CONCAT_SINGLE_PASS_LIMIT", 18, min_value=2, max_value=120)
+_cpu_count = max(os.cpu_count() or 4, 2)
+_default_ffmpeg_threads = max(1, int(round(_cpu_count * 0.7)))
+_MIX_FFMPEG_THREADS = _int_env("MIX_FFMPEG_THREADS", _default_ffmpeg_threads, min_value=1, max_value=32)
+_MIX_FFMPEG_FILTER_THREADS = _int_env(
+    "MIX_FFMPEG_FILTER_THREADS",
+    min(_MIX_FFMPEG_THREADS, 8),
+    min_value=1,
+    max_value=16,
+)
+_MIX_AUDIO_BITRATE = _bitrate_env("MIX_AUDIO_BITRATE", "320k")
 _MIX_PREFETCH_CONCURRENCY = _int_env("MIX_PREFETCH_CONCURRENCY", 2, min_value=1, max_value=6)
 _MIX_PREFETCH_MAX_TRACKS = _int_env("MIX_PREFETCH_MAX_TRACKS", 80, min_value=1, max_value=500)
 
@@ -143,22 +163,34 @@ def _safe_track_id(track_id: str) -> str:
     return safe[:64] if safe else "unknown"
 
 
-def _trim_cache_path(track_id: str, target_s: int, source_size: int) -> Path:
+def _trim_cache_path(track_id: str, target_s: int, source_size: int, preserve_start: bool = False) -> Path:
     safe_id = _safe_track_id(track_id)
-    return TRIM_CACHE_DIR / f"{safe_id}_t{target_s}_s{source_size}.mp3"
+    trim_mode = "intro" if preserve_start else "best"
+    return TRIM_CACHE_DIR / f"{safe_id}_t{target_s}_s{source_size}_{trim_mode}.mp3"
 
 
-def _get_cached_trimmed_track(track_id: str, target_s: int, source_size: int) -> Path | None:
-    cached = _trim_cache_path(track_id, target_s, source_size)
+def _get_cached_trimmed_track(
+    track_id: str,
+    target_s: int,
+    source_size: int,
+    preserve_start: bool = False,
+) -> Path | None:
+    cached = _trim_cache_path(track_id, target_s, source_size, preserve_start)
     if cached.exists() and cached.stat().st_size > 1000:
         return cached
     return None
 
 
-def _store_trimmed_track_cache(track_id: str, target_s: int, source_size: int, src_path: Path) -> None:
+def _store_trimmed_track_cache(
+    track_id: str,
+    target_s: int,
+    source_size: int,
+    src_path: Path,
+    preserve_start: bool = False,
+) -> None:
     """Store a trimmed output in cache, keyed by track+params+source size."""
     try:
-        cache_path = _trim_cache_path(track_id, target_s, source_size)
+        cache_path = _trim_cache_path(track_id, target_s, source_size, preserve_start)
         tmp_path = cache_path.with_suffix(".tmp")
         shutil.copy(str(src_path), str(tmp_path))
         tmp_path.replace(cache_path)
@@ -389,7 +421,7 @@ def _download_by_video_id(video_id: str, out_path: Path) -> bool:
             {
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
-                "preferredquality": "192",
+                "preferredquality": "320",
             }
         ],
         "socket_timeout": 30,
@@ -462,7 +494,7 @@ def _download_full_track(track_id: str, artist: str, title: str, out_path: Path,
                 {
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": "mp3",
-                    "preferredquality": "192",
+                    "preferredquality": "320",
                 }
             ],
             "socket_timeout": 30,
@@ -780,7 +812,13 @@ def _find_best_segment(energy: list[float], target_s: int, total_s: float,
     return (start_s, min(end_s, total_s))
 
 
-def _trim_track(mp3_path: Path, target_s: int, out_path: Path, track_id: str | None = None) -> bool:
+def _trim_track(
+    mp3_path: Path,
+    target_s: int,
+    out_path: Path,
+    track_id: str | None = None,
+    preserve_start: bool = False,
+) -> bool:
     """Analyze and trim a track to the best segment of target_s seconds.
 
     If the track is already shorter than target_s + 30s, keep it as-is.
@@ -793,7 +831,7 @@ def _trim_track(mp3_path: Path, target_s: int, out_path: Path, track_id: str | N
         source_size = 0
 
     if track_id and source_size > 0:
-        cached_trim = _get_cached_trimmed_track(track_id, target_s, source_size)
+        cached_trim = _get_cached_trimmed_track(track_id, target_s, source_size, preserve_start)
         if cached_trim:
             _hardlink_or_copy(cached_trim, out_path)
             logger.info(f"Trim cache: hit for '{track_id}' target={target_s}s")
@@ -817,14 +855,17 @@ def _trim_track(mp3_path: Path, target_s: int, out_path: Path, track_id: str | N
         logger.info(f"Trim: '{mp3_path.name}' is {total_s:.0f}s, no trim needed (target {target_s}s)")
         _hardlink_or_copy(mp3_path, out_path)
         if track_id and source_size > 0:
-            _store_trimmed_track_cache(track_id, target_s, source_size, out_path)
+            _store_trimmed_track_cache(track_id, target_s, source_size, out_path, preserve_start)
         return True
 
     logger.info(f"Trim: analyzing '{mp3_path.name}' ({total_s:.0f}s → target {target_s}s)")
 
     # Single-load combined analysis (energy + vocal in one librosa.load)
     energy, vocal_score = _analyze_for_trim(mp3_path)
-    if not energy:
+    if preserve_start:
+        start_s = 0.0
+        end_s = min(float(target_s), total_s)
+    elif not energy:
         # Analysis failed, just take from 15s to target_s+15s (skip intro)
         start_s = min(15.0, total_s * 0.1)
         end_s = min(start_s + target_s, total_s)
@@ -844,17 +885,24 @@ def _trim_track(mp3_path: Path, target_s: int, out_path: Path, track_id: str | N
         logger.info(f"Trim: best segment {start_s:.0f}s-{end_s:.0f}s ({duration:.0f}s)")
 
     # Use ffmpeg to trim with fade
-    fade_filter = f"afade=t=in:st=0:d={fade_s},afade=t=out:st={duration - fade_s}:d={fade_s}"
+    fade_parts: list[str] = []
+    if not preserve_start:
+        fade_parts.append(f"afade=t=in:st=0:d={fade_s}")
+    if duration > fade_s:
+        fade_parts.append(f"afade=t=out:st={max(duration - fade_s, 0):.2f}:d={fade_s}")
+    fade_filter = ",".join(fade_parts)
 
     cmd = [
         "ffmpeg", "-y",
         "-ss", f"{start_s:.2f}",
         "-i", str(mp3_path),
         "-t", f"{duration:.2f}",
-        "-af", fade_filter,
-        "-b:a", "192k",
-        str(out_path),
+        "-c:a", "libmp3lame",
+        "-b:a", _MIX_AUDIO_BITRATE,
     ]
+    if fade_filter:
+        cmd.extend(["-af", fade_filter])
+    cmd.append(str(out_path))
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -864,7 +912,7 @@ def _trim_track(mp3_path: Path, target_s: int, out_path: Path, track_id: str | N
             shutil.copy(str(mp3_path), str(out_path))
             return True
         if track_id and source_size > 0:
-            _store_trimmed_track_cache(track_id, target_s, source_size, out_path)
+            _store_trimmed_track_cache(track_id, target_s, source_size, out_path, preserve_start)
         return True
     except Exception as e:
         logger.error(f"Trim: failed: {e}")
@@ -873,6 +921,18 @@ def _trim_track(mp3_path: Path, target_s: int, out_path: Path, track_id: str | N
 
 
 _CONCAT_BATCH_SIZE = _MIX_CONCAT_BATCH_SIZE  # small batch size enables step-by-step concat
+
+
+def _estimate_concat_duration(
+    n_tracks: int,
+    transitions: list[dict],
+    default_crossfade_s: int,
+    per_track_estimate_s: int,
+) -> float:
+    if n_tracks <= 0:
+        return 0.0
+    total_crossfade = sum(t.get("duration", default_crossfade_s) for t in transitions[: max(n_tracks - 1, 0)])
+    return float(max(n_tracks * per_track_estimate_s - total_crossfade, 10))
 
 
 def _concat_single_pass(
@@ -891,14 +951,14 @@ def _concat_single_pass(
         return True
 
     while len(transitions) < n - 1:
-        transitions.append({"style": "crossfade", "duration": default_crossfade_s})
+        transitions.append({"style": "multiband", "duration": default_crossfade_s})
 
     inputs = []
     for f in track_files:
         inputs.extend(["-i", str(f)])
 
     def _get_crossfade_params(t: dict) -> str:
-        style = t.get("style", "crossfade")
+        style = t.get("style", "multiband")
         dur = max(1, min(t.get("duration", default_crossfade_s), 15))
         if style == "cut":
             dur = 0
@@ -910,26 +970,71 @@ def _concat_single_pass(
             return f"d={dur}:c1=log:c2=qsin"
         if style == "beatmatch":
             return f"d={dur}:c1=qsin:c2=qsin"
+        if style == "superpose":
+            return f"d={dur}:c1=nofade:c2=nofade"
         return f"d={dur}:c1=tri:c2=tri"
 
+    def _build_multiband_filter(inp_left: str, inp_right: str, out_label: str, stage_idx: int, duration: int) -> str:
+        """Build a 3-band DJ-like transition filter chain.
+
+        - Low band fades gently (bass continuity)
+        - Mid band uses standard crossfade
+        - High band transitions faster/smoother
+        """
+        i = stage_idx
+        d = max(1, min(duration, 15))
+        return ";".join([
+            f"{inp_left}asplit=3[aL{i}][aM{i}][aH{i}]",
+            f"{inp_right}asplit=3[bL{i}][bM{i}][bH{i}]",
+            f"[aL{i}]lowpass=f=180[aLf{i}]",
+            f"[aM{i}]highpass=f=180,lowpass=f=2500[aMf{i}]",
+            f"[aH{i}]highpass=f=2500[aHf{i}]",
+            f"[bL{i}]lowpass=f=180[bLf{i}]",
+            f"[bM{i}]highpass=f=180,lowpass=f=2500[bMf{i}]",
+            f"[bH{i}]highpass=f=2500[bHf{i}]",
+            f"[aLf{i}][bLf{i}]acrossfade=d={d}:c1=exp:c2=exp[lCf{i}]",
+            f"[aMf{i}][bMf{i}]acrossfade=d={d}:c1=tri:c2=tri[mCf{i}]",
+            f"[aHf{i}][bHf{i}]acrossfade=d={d}:c1=qsin:c2=qsin[hCf{i}]",
+            f"[lCf{i}][mCf{i}][hCf{i}]amix=inputs=3:weights='1 1 0.9':normalize=0,alimiter=limit=0.98{out_label}",
+        ])
+
+    def _build_transition_filter(inp_left: str, inp_right: str, t: dict, out_label: str, stage_idx: int) -> str:
+        style = t.get("style", "multiband")
+        dur = int(max(1, min(t.get("duration", default_crossfade_s), 15)))
+        if style == "multiband":
+            return _build_multiband_filter(inp_left, inp_right, out_label, stage_idx, dur)
+        params = _get_crossfade_params(t)
+        return f"{inp_left}{inp_right}acrossfade={params}{out_label}"
+
     if n == 2:
-        params = _get_crossfade_params(transitions[0])
-        filter_str = f"[0][1]acrossfade={params}"
+        filter_str = _build_transition_filter("[0]", "[1]", transitions[0], "", 1)
     else:
         filter_parts = []
         for i in range(1, n):
-            params = _get_crossfade_params(transitions[i - 1])
             inp_left = f"[{0}]" if i == 1 else f"[cf{i-1}]"
             inp_right = f"[{i}]"
             out_label = f"[cf{i}]" if i < n - 1 else ""
-            filter_parts.append(f"{inp_left}{inp_right}acrossfade={params}{out_label}")
+            filter_parts.append(_build_transition_filter(inp_left, inp_right, transitions[i - 1], out_label, i))
         filter_str = ";".join(filter_parts)
+
+    output_ext = output.suffix.lower()
+    codec_args = [
+        "-c:a", "pcm_s16le",
+    ] if output_ext == ".wav" else [
+        "-c:a", "libmp3lame",
+        "-b:a", _MIX_AUDIO_BITRATE,
+    ]
 
     cmd = [
         "ffmpeg", "-y",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-nostats",
+        "-threads", str(_MIX_FFMPEG_THREADS),
+        "-filter_threads", str(_MIX_FFMPEG_FILTER_THREADS),
         *inputs,
         "-filter_complex", filter_str,
-        "-b:a", "192k",
+        *codec_args,
         "-progress", "pipe:1",
         str(output),
     ]
@@ -974,6 +1079,9 @@ def _concat_with_transitions(
     output: Path,
     progress_cb: Callable[[float], None] | None = None,
     level: int = 0,
+    temp_dir: Path | None = None,
+    progress_total_s: float | None = None,
+    per_track_estimate_s: int = 180,
 ) -> bool:
     """Concatenate tracks with per-pair transition styles, batching if needed.
 
@@ -981,79 +1089,166 @@ def _concat_with_transitions(
     vs one huge ffmpeg graph for large playlists.
     """
     n = len(track_files)
-    if n <= _CONCAT_BATCH_SIZE:
-        return _concat_single_pass(track_files, transitions, default_crossfade_s, output, progress_cb)
+    while len(transitions) < n - 1:
+        transitions.append({"style": "multiband", "duration": default_crossfade_s})
+
+    def _run_op(
+        op_tracks: list[Path],
+        op_transitions: list[dict],
+        op_output: Path,
+        work_start: float,
+        work_weight: float,
+        total_work: float,
+    ) -> bool:
+        op_est = _estimate_concat_duration(
+            len(op_tracks),
+            op_transitions,
+            default_crossfade_s,
+            per_track_estimate_s,
+        )
+
+        def _mapped_progress(local_seconds: float) -> None:
+            if not progress_cb:
+                return
+            if progress_total_s is None:
+                progress_cb(local_seconds)
+                return
+            ratio = min(max(local_seconds / max(op_est, 1.0), 0.0), 0.99)
+            global_ratio = (work_start + work_weight * ratio) / max(total_work, 1.0)
+            progress_cb(progress_total_s * global_ratio)
+
+        ok = _concat_single_pass(op_tracks, op_transitions, default_crossfade_s, op_output, _mapped_progress)
+        if ok and progress_cb and progress_total_s is not None:
+            global_ratio = (work_start + work_weight) / max(total_work, 1.0)
+            progress_cb(progress_total_s * min(global_ratio, 0.999))
+        return ok
+
+    if n <= _MIX_CONCAT_SINGLE_PASS_LIMIT:
+        logger.info(f"Mix: single-pass concat for {n} tracks (limit={_MIX_CONCAT_SINGLE_PASS_LIMIT})")
+        return _run_op(
+            track_files,
+            transitions,
+            output,
+            work_start=0.0,
+            work_weight=1.0,
+            total_work=1.0,
+        )
 
     # --- Batched concat for large playlists ---
     logger.info(f"Mix: batching level={level} {n} tracks into groups of {_CONCAT_BATCH_SIZE}")
 
-    while len(transitions) < n - 1:
-        transitions.append({"style": "crossfade", "duration": default_crossfade_s})
-
-    batch_base_s = [0.0]
-
-    def _batch_progress(seconds: float) -> None:
-        if progress_cb:
-            progress_cb(batch_base_s[0] + seconds)
-
-    batch_outputs: list[Path] = []
-    batch_join_transitions: list[dict] = []
+    batch_specs: list[tuple[int, int, list[Path], list[dict], Path, float]] = []
 
     start = 0
     batch_idx = 0
+    temp_root = temp_dir or output.parent
+    temp_root.mkdir(parents=True, exist_ok=True)
+    while start < n:
+        end = min(start + _CONCAT_BATCH_SIZE, n)
+        batch_tracks = track_files[start:end]
+        batch_trans = transitions[start:end - 1] if end - start > 1 else []
+        batch_out = temp_root / f"_batch_l{level}_{batch_idx:03d}.wav"
+        batch_est = _estimate_concat_duration(
+            len(batch_tracks),
+            batch_trans,
+            default_crossfade_s,
+            per_track_estimate_s,
+        )
+        batch_specs.append((start, end, batch_tracks, batch_trans, batch_out, batch_est))
+        start = end
+        batch_idx += 1
+
+    # Work model: one op per batch + one join op for each batch after the first.
+    work_items: list[float] = [spec[5] for spec in batch_specs]
+    running_est = batch_specs[0][5] if batch_specs else 0.0
+    for i in range(1, len(batch_specs)):
+        join_duration = transitions[batch_specs[i][0] - 1].get("duration", default_crossfade_s)
+        join_est = max(running_est + batch_specs[i][5] - join_duration, 10)
+        work_items.append(join_est)
+        running_est = join_est
+    total_work = max(sum(work_items), 1.0)
+
+    if len(batch_specs) == 1:
+        _, _, only_tracks, only_trans, _, _ = batch_specs[0]
+        return _run_op(
+            only_tracks,
+            only_trans,
+            output,
+            work_start=0.0,
+            work_weight=1.0,
+            total_work=1.0,
+        )
+
+    current_work_start = 0.0
+    work_idx = 0
+    current_mix: Path | None = None
+
     try:
-        while start < n:
-            end = min(start + _CONCAT_BATCH_SIZE, n)
-            batch_tracks = track_files[start:end]
-            batch_trans = transitions[start:end - 1] if end - start > 1 else []
+        for i, (b_start, b_end, batch_tracks, batch_trans, batch_out, batch_est) in enumerate(batch_specs):
+            logger.info(f"Mix: batch {i} — tracks {b_start}..{b_end - 1} ({len(batch_tracks)} tracks)")
 
-            # Include recursion level in temp filename to avoid in-place collisions.
-            batch_out = output.parent / f"_batch_l{level}_{batch_idx:03d}.mp3"
-            logger.info(f"Mix: batch {batch_idx} — tracks {start}..{end - 1} ({len(batch_tracks)} tracks)")
-
-            ok = _concat_single_pass(batch_tracks, batch_trans, default_crossfade_s, batch_out, _batch_progress)
+            ok = _run_op(
+                batch_tracks,
+                batch_trans,
+                batch_out,
+                work_start=current_work_start,
+                work_weight=work_items[work_idx],
+                total_work=total_work,
+            )
             if not ok:
                 return False
 
-            batch_outputs.append(batch_out)
+            current_work_start += work_items[work_idx]
+            work_idx += 1
 
-            # Save the transition between this batch and the next
-            if end < n:
-                batch_join_transitions.append(transitions[end - 1])
+            if i == 0:
+                current_mix = batch_out
+                continue
 
-            # Update accumulated seconds for progress tracking
-            batch_crossfade = sum(t.get("duration", default_crossfade_s) for t in batch_trans)
-            batch_dur_estimate = len(batch_tracks) * 180 - batch_crossfade
-            batch_base_s[0] += max(batch_dur_estimate, 10)
+            if current_mix is None:
+                return False
 
-            start = end
-            batch_idx += 1
+            join_transition = transitions[b_start - 1]
+            is_last_join = i == len(batch_specs) - 1
+            join_out = output if is_last_join else temp_root / f"_merge_l{level}_{i:03d}.wav"
+            ok = _run_op(
+                [current_mix, batch_out],
+                [join_transition],
+                join_out,
+                work_start=current_work_start,
+                work_weight=work_items[work_idx],
+                total_work=total_work,
+            )
+            if not ok:
+                return False
 
-        # Merge batch outputs (recursive — will batch again if > _CONCAT_BATCH_SIZE batches)
-        if len(batch_outputs) == 1:
-            shutil.move(str(batch_outputs[0]), str(output))
-            return True
+            current_work_start += work_items[work_idx]
+            work_idx += 1
 
-        logger.info(f"Mix: merging level={level} {len(batch_outputs)} batch outputs")
-        ok = _concat_with_transitions(
-            batch_outputs,
-            batch_join_transitions,
-            default_crossfade_s,
-            output,
-            _batch_progress,
-            level + 1,
-        )
-        return ok
+            current_mix.unlink(missing_ok=True)
+            batch_out.unlink(missing_ok=True)
+            current_mix = join_out
+
+        if current_mix is None:
+            return False
+
+        if current_mix != output:
+            shutil.move(str(current_mix), str(output))
+        if progress_cb and progress_total_s is not None:
+            progress_cb(progress_total_s)
+        return True
 
     finally:
-        for bf in batch_outputs:
-            bf.unlink(missing_ok=True)
+        for tmp in temp_root.glob("_batch_l*"):
+            tmp.unlink(missing_ok=True)
+        for tmp in temp_root.glob("_merge_l*"):
+            tmp.unlink(missing_ok=True)
 
 
 def _pick_auto_transition(info_a: dict, info_b: dict, default_dur: int) -> dict:
     """Pick the best transition style between track A and track B based on analysis."""
     if not info_a or not info_b:
-        return {"style": "crossfade", "duration": default_dur}
+        return {"style": "multiband", "duration": default_dur}
 
     bpm_a = info_a.get("bpm", 0)
     bpm_b = info_b.get("bpm", 0)
@@ -1073,8 +1268,8 @@ def _pick_auto_transition(info_a: dict, info_b: dict, default_dur: int) -> dict:
         if np.mean(last_quarter) < np.mean(first_half) * 0.4:
             return {"style": "fade", "duration": default_dur}
 
-    # Default: standard crossfade
-    return {"style": "crossfade", "duration": default_dur}
+    # Default: 3-band mix for smoother DJ-like transitions
+    return {"style": "multiband", "duration": default_dur}
 
 
 async def generate_mix(
@@ -1082,7 +1277,7 @@ async def generate_mix(
     crossfade_s: int,
     on_progress: Callable[[str, int, int, str], Awaitable[None]],
     target_duration_s: int = 0,
-    transition_style: str = "crossfade",
+    transition_style: str = "multiband",
     transitions_override: list[dict] | None = None,
     playlist_id: str = "",
 ) -> str | None:
@@ -1093,12 +1288,13 @@ async def generate_mix(
     crossfade_s: crossfade duration in seconds
     on_progress: async callback(status, current, total, detail)
     target_duration_s: target duration per track in seconds (0 = no trimming)
-    transition_style: global style ("crossfade", "fade", "cut", "echo", "beatmatch", "auto")
+    transition_style: global style ("multiband", "crossfade", "fade", "cut", "echo", "beatmatch", "auto")
     transitions_override: per-pair overrides [{"style": str, "duration": int}, ...]
 
     Returns mix_id for download, or None on failure.
     """
     work_dir = Path(tempfile.mkdtemp(dir=str(MIX_DIR)))
+    concat_temp_dir = work_dir / "concat_batches"
     total = len(tracks)
     downloaded: list[Path] = []
     downloaded_track_ids: list[str] = []
@@ -1173,7 +1369,7 @@ async def generate_mix(
                     trimmed_path = work_dir / f"trimmed_{i:03d}.mp3"
                     trimmed_paths.append(trimmed_path)
                     batch_futures.append(loop.run_in_executor(
-                        _executor, _trim_track, dl_path, target_duration_s, trimmed_path, track_id
+                        _executor, _trim_track, dl_path, target_duration_s, trimmed_path, track_id, i == 0
                     ))
 
                 await asyncio.gather(*batch_futures)
@@ -1241,11 +1437,16 @@ async def generate_mix(
         )
         estimated_dur = max(total_track_dur - total_crossfade, 30)
 
+        concat_mode_detail = (
+            f"Concaténation directe de {len(downloaded)} pistes (single-pass)..."
+            if len(downloaded) <= _MIX_CONCAT_SINGLE_PASS_LIMIT
+            else f"Concaténation progressive de {len(downloaded)} pistes (lots de {_CONCAT_BATCH_SIZE})..."
+        )
         await on_progress(
             "mixing",
             0,
             int(estimated_dur),
-            f"Concaténation progressive de {len(downloaded)} pistes (lots de {_CONCAT_BATCH_SIZE})...",
+            concat_mode_detail,
         )
         mix_id = uuid.uuid4().hex[:12]
         output_path = MIX_DIR / f"{mix_id}.mp3"
@@ -1259,7 +1460,17 @@ async def generate_mix(
 
         loop = asyncio.get_event_loop()
         concat_future = loop.run_in_executor(
-            _executor, _concat_with_transitions, downloaded, mix_transitions, crossfade_s, output_path, _progress_cb
+            _executor,
+            _concat_with_transitions,
+            downloaded,
+            mix_transitions,
+            crossfade_s,
+            output_path,
+            _progress_cb,
+            0,
+            concat_temp_dir,
+            float(estimated_dur),
+            int(target_duration_s if target_duration_s > 0 else 180),
         )
 
         # Poll progress while ffmpeg runs
@@ -1294,11 +1505,8 @@ async def generate_mix(
         return mix_id
 
     finally:
-        # Clean up individual track files
-        for f in downloaded:
-            f.unlink(missing_ok=True)
-        if work_dir.exists() and not any(work_dir.iterdir()):
-            work_dir.rmdir()
+        # Keep only the final mix file; all per-job intermediates live in work_dir.
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 # ── Transition preview ──────────────────────────────────────────────
@@ -1321,7 +1529,27 @@ def _get_crossfade_params_for_style(style: str, duration: int) -> str:
         return f"d={dur}:c1=log:c2=qsin"
     if style == "beatmatch":
         return f"d={dur}:c1=qsin:c2=qsin"
+    if style == "superpose":
+        return f"d={dur}:c1=nofade:c2=nofade"
     return f"d={dur}:c1=tri:c2=tri"
+
+
+def _build_multiband_preview_filter(duration: int) -> str:
+    d = max(1, min(duration, 15))
+    return ";".join([
+        "[0]asplit=3[aL][aM][aH]",
+        "[1]asplit=3[bL][bM][bH]",
+        "[aL]lowpass=f=180[aLf]",
+        "[aM]highpass=f=180,lowpass=f=2500[aMf]",
+        "[aH]highpass=f=2500[aHf]",
+        "[bL]lowpass=f=180[bLf]",
+        "[bM]highpass=f=180,lowpass=f=2500[bMf]",
+        "[bH]highpass=f=2500[bHf]",
+        f"[aLf][bLf]acrossfade=d={d}:c1=exp:c2=exp[lCf]",
+        f"[aMf][bMf]acrossfade=d={d}:c1=tri:c2=tri[mCf]",
+        f"[aHf][bHf]acrossfade=d={d}:c1=qsin:c2=qsin[hCf]",
+        "[lCf][mCf][hCf]amix=inputs=3:weights='1 1 0.9':normalize=0,alimiter=limit=0.98",
+    ])
 
 
 def _cleanup_transition_cache() -> None:
@@ -1350,9 +1578,11 @@ def _generate_transition_preview_sync(
     from_artist: str, from_name: str,
     to_artist: str, to_name: str,
     style: str, duration: int,
+    target_duration_s: int = 0,
+    from_is_first: bool = False,
 ) -> Path | None:
     """Generate a short crossfade preview between two tracks (blocking)."""
-    cache_key = f"{from_id}_{to_id}_{style}_{duration}"
+    cache_key = f"{from_id}_{to_id}_{style}_{duration}_t{target_duration_s}_f{int(from_is_first)}"
     output = TRANSITION_DIR / f"{cache_key}.mp3"
 
     if output.exists() and output.stat().st_size > 1000:
@@ -1363,8 +1593,12 @@ def _generate_transition_preview_sync(
 
     track_a = work_dir / "a_full.mp3"
     track_b = work_dir / "b_full.mp3"
-    seg_a = work_dir / "seg_a.mp3"
-    seg_b = work_dir / "seg_b.mp3"
+    track_a_use = track_a
+    track_b_use = track_b
+    trimmed_a = work_dir / "a_trimmed.mp3"
+    trimmed_b = work_dir / "b_trimmed.mp3"
+    seg_a = work_dir / "seg_a.wav"
+    seg_b = work_dir / "seg_b.wav"
 
     try:
         # Download tracks (uses cache)
@@ -1375,9 +1609,21 @@ def _generate_transition_preview_sync(
             logger.error(f"TransPreview: failed to download track B '{to_artist} - {to_name}'")
             return None
 
+        # Apply the same target-duration trimming logic as final mix when requested.
+        if target_duration_s > 0:
+            try:
+                ok_a = _trim_track(track_a, target_duration_s, trimmed_a, from_id, from_is_first)
+                ok_b = _trim_track(track_b, target_duration_s, trimmed_b, to_id, False)
+                if ok_a and trimmed_a.exists() and trimmed_a.stat().st_size > 1000:
+                    track_a_use = trimmed_a
+                if ok_b and trimmed_b.exists() and trimmed_b.stat().st_size > 1000:
+                    track_b_use = trimmed_b
+            except Exception as e:
+                logger.warning(f"TransPreview: trim fallback to full tracks: {e}")
+
         # Get durations
-        dur_a = _probe_duration(track_a)
-        dur_b = _probe_duration(track_b)
+        dur_a = _probe_duration(track_a_use)
+        dur_b = _probe_duration(track_b_use)
         if dur_a < 5 or dur_b < 5:
             logger.error(f"TransPreview: tracks too short (A={dur_a:.0f}s, B={dur_b:.0f}s)")
             return None
@@ -1388,15 +1634,15 @@ def _generate_transition_preview_sync(
         # Extract last seg_len seconds of track A with fade-out at the very end
         start_a = max(0, dur_a - seg_len)
         cmd_a = [
-            "ffmpeg", "-y", "-ss", f"{start_a:.2f}", "-i", str(track_a),
+            "ffmpeg", "-y", "-ss", f"{start_a:.2f}", "-i", str(track_a_use),
             "-t", f"{seg_len:.2f}",
-            "-b:a", "192k", str(seg_a),
+            "-c:a", "pcm_s16le", str(seg_a),
         ]
 
         # Extract first seg_len seconds of track B
         cmd_b = [
-            "ffmpeg", "-y", "-t", f"{seg_len:.2f}", "-i", str(track_b),
-            "-b:a", "192k", str(seg_b),
+            "ffmpeg", "-y", "-t", f"{seg_len:.2f}", "-i", str(track_b_use),
+            "-c:a", "pcm_s16le", str(seg_b),
         ]
 
         for cmd in [cmd_a, cmd_b]:
@@ -1405,13 +1651,17 @@ def _generate_transition_preview_sync(
                 logger.error(f"TransPreview: trim failed: {result.stderr[-300:]}")
                 return None
 
-        # Apply crossfade
-        params = _get_crossfade_params_for_style(style, duration)
+        # Apply transition style
+        filter_expr = (
+            _build_multiband_preview_filter(duration)
+            if style == "multiband"
+            else f"[0][1]acrossfade={_get_crossfade_params_for_style(style, duration)}"
+        )
         cmd_mix = [
             "ffmpeg", "-y",
             "-i", str(seg_a), "-i", str(seg_b),
-            "-filter_complex", f"[0][1]acrossfade={params}",
-            "-b:a", "192k", str(output),
+            "-filter_complex", filter_expr,
+            "-c:a", "libmp3lame", "-b:a", _MIX_AUDIO_BITRATE, str(output),
         ]
 
         result = subprocess.run(cmd_mix, capture_output=True, text=True, timeout=60)
@@ -1438,14 +1688,25 @@ async def generate_transition_preview(
     from_id: str, to_id: str,
     from_artist: str, from_name: str,
     to_artist: str, to_name: str,
-    style: str = "crossfade", duration: int = 8,
+    style: str = "multiband", duration: int = 8,
+    target_duration_s: int = 0,
+    from_is_first: bool = False,
 ) -> Path | None:
     """Async wrapper for transition preview generation."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         _executor,
         _generate_transition_preview_sync,
-        from_id, to_id, from_artist, from_name, to_artist, to_name, style, duration,
+        from_id,
+        to_id,
+        from_artist,
+        from_name,
+        to_artist,
+        to_name,
+        style,
+        duration,
+        target_duration_s,
+        from_is_first,
     )
 
 

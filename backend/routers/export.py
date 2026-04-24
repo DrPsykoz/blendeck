@@ -8,10 +8,18 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 
-from models.track import ExportNewPlaylistRequest, ExportReorderRequest, ExportFileRequest
+from models.track import (
+    ExportNewPlaylistRequest,
+    ExportReorderRequest,
+    ExportFileRequest,
+    PreviewTransitionsRequest,
+    TransitionPreview,
+    TransitionOverride,
+)
 from services.spotify import create_playlist, add_tracks_to_playlist, replace_playlist_tracks
 from services import features_cache
 from services.mix_generator import generate_mix, get_mix_path, cleanup_old_mixes, get_mix_history, generate_transition_preview
+from services.transition import score_transition
 import asyncio
 
 router = APIRouter(prefix="/api/export", tags=["export"])
@@ -121,7 +129,7 @@ class MixTrack(BaseModel):
 
 
 class TransitionConfig(BaseModel):
-    style: str = "crossfade"  # crossfade, fade, cut, echo, beatmatch
+    style: str = "multiband"  # crossfade, fade, cut, echo, beatmatch, superpose, multiband
     duration: int = 8
 
 
@@ -129,7 +137,7 @@ class MixRequest(BaseModel):
     tracks: list[MixTrack]
     crossfade: int = 8  # seconds
     target_duration: int = 0  # seconds per track, 0 = no trimming
-    transition_style: str = "crossfade"  # global default style
+    transition_style: str = "multiband"  # global default style
     transitions: list[TransitionConfig] | None = None  # per-pair overrides
     playlist_id: str = ""
 
@@ -150,12 +158,12 @@ async def export_mix(req: MixRequest, authorization: str = Header()):
     track_dicts = [{"id": t.id, "name": t.name, "artist": t.artist, "duration_ms": t.duration_ms} for t in req.tracks]
     crossfade_s = max(0, min(req.crossfade, 15))
     target_dur = max(0, min(req.target_duration, 600))  # cap at 10 min
-    allowed_styles = {"crossfade", "fade", "cut", "echo", "beatmatch", "auto"}
-    trans_style = req.transition_style if req.transition_style in allowed_styles else "crossfade"
+    allowed_styles = {"crossfade", "fade", "cut", "echo", "beatmatch", "superpose", "multiband", "auto"}
+    trans_style = req.transition_style if req.transition_style in allowed_styles else "multiband"
     trans_overrides = None
     if req.transitions:
         trans_overrides = [
-            {"style": t.style if t.style in allowed_styles else "crossfade", "duration": max(0, min(t.duration, 15))}
+            {"style": t.style if t.style in allowed_styles else "multiband", "duration": max(0, min(t.duration, 15))}
             for t in req.transitions
         ]
 
@@ -265,7 +273,61 @@ async def mix_history(playlist_id: str = Query(""), authorization: str = Header(
 
 
 _TRACK_ID_RE = re.compile(r'^[a-zA-Z0-9]{1,32}$')
-_ALLOWED_STYLES = {"crossfade", "fade", "cut", "echo", "beatmatch"}
+_ALLOWED_STYLES = {"crossfade", "fade", "cut", "echo", "beatmatch", "superpose", "multiband", "auto"}
+
+
+def _resolve_transition_style(style: str, transition_score) -> str:
+    if style != "auto":
+        return style
+    if transition_score.bpm_score >= 0.9 and transition_score.energy_score >= 0.65:
+        return "beatmatch"
+    if transition_score.energy_score <= 0.4:
+        return "fade"
+    if transition_score.key_score <= 0.35:
+        return "echo"
+    return "multiband"
+
+
+@router.post("/transitions", response_model=list[TransitionPreview])
+async def preview_transitions(req: PreviewTransitionsRequest, authorization: str = Header()):
+    """Compute adjacent transition scores for the provided track order."""
+    _extract_token(authorization)
+
+    style = req.transition_style if req.transition_style in _ALLOWED_STYLES else "multiband"
+    duration = max(1, min(req.transition_duration, 15))
+    tracks = req.tracks
+    override_map: dict[tuple[str, str], TransitionOverride] = {
+        (transition.from_track_id, transition.to_track_id): transition
+        for transition in req.transitions
+        if _TRACK_ID_RE.match(transition.from_track_id) and _TRACK_ID_RE.match(transition.to_track_id)
+    }
+
+    if len(tracks) < 2:
+        return []
+
+    previews: list[TransitionPreview] = []
+    total_pairs = len(tracks) - 1
+    for idx in range(total_pairs):
+        position_ratio = idx / max(total_pairs - 1, 1)
+        transition = score_transition(
+            tracks[idx],
+            tracks[idx + 1],
+            position_ratio=position_ratio,
+            energy_curve=req.energy_curve,
+        )
+        pair_key = (tracks[idx].id, tracks[idx + 1].id)
+        override = override_map.get(pair_key)
+        resolved_style_input = override.style if override else style
+        resolved_duration = max(1, min(override.duration or duration, 15)) if override else duration
+        previews.append(
+            TransitionPreview(
+                **transition.model_dump(),
+                style=_resolve_transition_style(resolved_style_input, transition),
+                duration=resolved_duration,
+            )
+        )
+
+    return previews
 
 
 @router.get("/transition-preview")
@@ -276,8 +338,10 @@ async def transition_preview(
     from_artist: str = Query(""),
     to_name: str = Query(""),
     to_artist: str = Query(""),
-    style: str = Query("crossfade"),
+    style: str = Query("multiband"),
     duration: int = Query(8),
+    target_duration: int = Query(0),
+    from_is_first: bool = Query(False),
     authorization: str = Header(),
 ):
     """Generate and stream a short crossfade preview between two tracks."""
@@ -286,8 +350,11 @@ async def transition_preview(
     if not _TRACK_ID_RE.match(from_id) or not _TRACK_ID_RE.match(to_id):
         raise HTTPException(status_code=400, detail="Invalid track ID")
 
-    style = style if style in _ALLOWED_STYLES else "crossfade"
+    style = style if style in _ALLOWED_STYLES else "multiband"
+    if style == "auto":
+        style = "multiband"
     duration = max(1, min(duration, 15))
+    target_duration = max(0, min(target_duration, 600))
 
     try:
         await asyncio.wait_for(_mix_semaphore.acquire(), timeout=0.1)
@@ -299,7 +366,7 @@ async def transition_preview(
             from_id, to_id,
             from_artist, from_name,
             to_artist, to_name,
-            style, duration,
+            style, duration, target_duration, from_is_first,
         )
     finally:
         _mix_semaphore.release()
