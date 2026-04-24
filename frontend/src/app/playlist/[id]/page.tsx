@@ -5,8 +5,10 @@ import { useMutation } from "@tanstack/react-query";
 import {
   analyzePlaylist,
   generateSet,
+  previewTransitions,
   Track,
   TransitionScore,
+  TransitionOverride,
   GeneratedSet,
   AnalysisProgress as AnalysisProgressData,
   fetchPlaylistCacheStatus,
@@ -24,9 +26,7 @@ import {
   Clock,
   Calendar,
   Wand2,
-  Settings2,
   Loader2,
-  ChevronRight,
 } from "lucide-react";
 import TrackTable from "@/components/TrackTable";
 import EnergyChart from "@/components/EnergyChart";
@@ -48,7 +48,10 @@ export default function PlaylistPage() {
   const [sortAsc, setSortAsc] = useState(true);
   const [transitions, setTransitions] = useState<TransitionScore[]>([]);
   const [generatedSet, setGeneratedSet] = useState<GeneratedSet | null>(null);
-  const [advancedMode, setAdvancedMode] = useState(false);
+  const [previewTransitionStyle, setPreviewTransitionStyle] = useState("multiband");
+  const [previewTransitionDuration, setPreviewTransitionDuration] = useState(8);
+  const [previewTargetDuration, setPreviewTargetDuration] = useState(0);
+  const [transitionOverrides, setTransitionOverrides] = useState<Record<string, TransitionOverride>>({});
 
   // Analysis SSE state
   const [tracks, setTracks] = useState<Track[] | null>(null);
@@ -175,6 +178,38 @@ export default function PlaylistPage() {
     },
   });
 
+  useEffect(() => {
+    if (!analysisComplete || sortedTracks.length < 2) {
+      setTransitions([]);
+      return;
+    }
+
+    let active = true;
+    const timer = setTimeout(async () => {
+      try {
+        const nextTransitions = await previewTransitions(
+          sortedTracks,
+          previewTransitionStyle,
+          previewTransitionDuration,
+          "arc",
+          Object.values(transitionOverrides),
+        );
+        if (active) {
+          setTransitions(nextTransitions);
+        }
+      } catch {
+        if (active) {
+          setTransitions([]);
+        }
+      }
+    }, 150);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [analysisComplete, sortedTracks, previewTransitionStyle, previewTransitionDuration, transitionOverrides]);
+
   // Stats
   const stats = useMemo(() => {
     if (!sortedTracks.length) return null;
@@ -196,7 +231,6 @@ export default function PlaylistPage() {
     if (key === "default") {
       setSortedTracks([...tracks]);
       setActiveSort("default");
-      setTransitions([]);
       setGeneratedSet(null);
       return;
     }
@@ -205,7 +239,6 @@ export default function PlaylistPage() {
     setSortAsc(asc);
     setActiveSort(key);
     setGeneratedSet(null);
-    setTransitions([]);
 
     const sorted = [...sortedTracks].sort((a, b) => {
       const afA = a.audio_features;
@@ -241,7 +274,25 @@ export default function PlaylistPage() {
     setSortedTracks(newTracks);
     setActiveSort("default");
     setGeneratedSet(null);
-    setTransitions([]);
+  };
+
+  const handleTransitionStyleChange = (fromTrackId: string, toTrackId: string, style: string) => {
+    const key = `${fromTrackId}_${toTrackId}`;
+    setTransitionOverrides((prev) => ({
+      ...prev,
+      [key]: {
+        from_track_id: fromTrackId,
+        to_track_id: toTrackId,
+        style,
+      },
+    }));
+    setTransitions((prev) =>
+      prev.map((transition) =>
+        transition.from_track_id === fromTrackId && transition.to_track_id === toTrackId
+          ? { ...transition, style }
+          : transition,
+      ),
+    );
   };
 
   const handleGenerate = (params: Parameters<typeof generateSet>[1]) => {
@@ -358,85 +409,19 @@ export default function PlaylistPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* Advanced mode toggle */}
-          <button
-            onClick={() => setAdvancedMode(!advancedMode)}
-            className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm transition-all ${
-              advancedMode
-                ? "border-amber/40 bg-amber/10 text-amber"
-                : "border-deck-border text-sand-300 hover:border-sand-400 hover:text-sand-50"
-            }`}
-          >
-            <Settings2 className="h-4 w-4" />
-            <span className="hidden sm:inline">Avancé</span>
-          </button>
           <ExportMenu
             tracks={sortedTracks}
             transitions={transitions}
             playlistId={playlistId}
             playlistName="Playlist"
+            onTransitionSettingsChange={(style, duration, targetDuration) => {
+              setPreviewTransitionStyle(style);
+              setPreviewTransitionDuration(duration);
+              setPreviewTargetDuration(targetDuration);
+            }}
           />
         </div>
       </div>
-
-      {/* Quick action bar (basic mode) */}
-      {!advancedMode && (
-        <div className="mb-6 flex flex-wrap items-center gap-3">
-          {/* One-click generate */}
-          {!generatedSet ? (
-            <button
-              onClick={handleQuickGenerate}
-              disabled={generateMutation.isPending}
-              className="flex items-center gap-2 rounded-full bg-amber px-5 py-2.5 font-display text-sm font-semibold text-deck-bg transition-all hover:bg-amber-light hover:shadow-lg hover:shadow-amber/20 active:scale-[0.98] disabled:opacity-50"
-            >
-              {generateMutation.isPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Génération...
-                </>
-              ) : (
-                <>
-                  <Wand2 className="h-4 w-4" />
-                  Générer un set DJ
-                </>
-              )}
-            </button>
-          ) : (
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 rounded-full border border-amber/30 bg-amber/5 px-4 py-2">
-                <Wand2 className="h-4 w-4 text-amber" />
-                <span className="text-sm font-medium text-amber">Set généré</span>
-                <span className="text-xs text-sand-300">
-                  — {(generatedSet.total_score / Math.max(generatedSet.transitions.length, 1) * 100).toFixed(0)}% fluidité
-                </span>
-              </div>
-              <button
-                onClick={handleQuickGenerate}
-                disabled={generateMutation.isPending}
-                className="flex items-center gap-1.5 rounded-full border border-deck-border px-3 py-2 text-xs text-sand-300 transition-colors hover:border-sand-400 hover:text-sand-50"
-              >
-                {generateMutation.isPending ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <Wand2 className="h-3 w-3" />
-                )}
-                Regénérer
-              </button>
-            </div>
-          )}
-
-          {/* Hint to switch to advanced */}
-          {!generatedSet && !generateMutation.isPending && (
-            <button
-              onClick={() => setAdvancedMode(true)}
-              className="flex items-center gap-1 text-xs text-sand-400 transition-colors hover:text-sand-200"
-            >
-              Personnaliser les paramètres
-              <ChevronRight className="h-3 w-3" />
-            </button>
-          )}
-        </div>
-      )}
 
       {/* Stats cards */}
       {stats && (
@@ -495,85 +480,50 @@ export default function PlaylistPage() {
           )}
         </div>
 
-      {/* Main content */}
-      {advancedMode ? (
-        /* Advanced layout: 2 columns */
-        <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
-          <div className="space-y-4">
-            {/* Energy chart */}
-            <EnergyChart tracks={sortedTracks} transitions={transitions} />
-
-            {/* Generated set score banner */}
-            {generatedSet && (
-              <div className="flex items-center justify-between rounded-xl border border-amber/20 bg-amber/5 px-4 py-3">
-                <div>
-                  <span className="text-sm font-semibold text-amber">
-                    Set DJ généré
-                  </span>
-                  <span className="ml-2 text-xs text-sand-300">
-                    Score global: {(generatedSet.total_score / Math.max(generatedSet.transitions.length, 1) * 100).toFixed(1)}%
-                  </span>
-                </div>
-                <span className="text-xs text-sand-400">
-                  {generatedSet.transitions.filter((t) => t.total_score >= 0.8).length}/
-                  {generatedSet.transitions.length} transitions fluides
-                </span>
-              </div>
-            )}
-
-            {/* Track table - full columns */}
-            <TrackTable
-              tracks={sortedTracks}
-              transitions={transitions}
-              onReorder={handleReorder}
-              compact={false}
-            />
-          </div>
-
-          {/* Sidebar: Set generator */}
-          <div className="lg:sticky lg:top-16 lg:self-start space-y-4">
-            <SetGeneratorPanel
-              onGenerate={handleGenerate}
-              isLoading={generateMutation.isPending}
-            />
-            <MixHistory playlistId={playlistId} />
-          </div>
-        </div>
-      ) : (
-        /* Basic layout: single clean column */
+      {/* Main content - Advanced layout: 2 columns */}
+      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-4">
+          {/* Energy chart */}
+          <EnergyChart tracks={sortedTracks} transitions={transitions} />
+
           {/* Generated set score banner */}
           {generatedSet && (
             <div className="flex items-center justify-between rounded-xl border border-amber/20 bg-amber/5 px-4 py-3">
-              <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-amber/20">
-                  <Wand2 className="h-4 w-4 text-amber" />
-                </div>
-                <div>
-                  <span className="text-sm font-semibold text-amber">Set optimisé</span>
-                  <span className="ml-2 text-xs text-sand-300">
-                    {generatedSet.transitions.filter((t) => t.total_score >= 0.8).length}/{generatedSet.transitions.length} transitions fluides
-                  </span>
-                </div>
+              <div>
+                <span className="text-sm font-semibold text-amber">
+                  Set DJ généré
+                </span>
+                <span className="ml-2 text-xs text-sand-300">
+                  Score global: {(generatedSet.total_score / Math.max(generatedSet.transitions.length, 1) * 100).toFixed(1)}%
+                </span>
               </div>
-              <span className="rounded-full bg-amber/10 px-3 py-1 font-mono text-sm font-bold text-amber">
-                {(generatedSet.total_score / Math.max(generatedSet.transitions.length, 1) * 100).toFixed(0)}%
+              <span className="text-xs text-sand-400">
+                {generatedSet.transitions.filter((t) => t.total_score >= 0.8).length}/
+                {generatedSet.transitions.length} transitions fluides
               </span>
             </div>
           )}
 
-          {/* Track table - compact */}
+          {/* Track table - full columns */}
           <TrackTable
             tracks={sortedTracks}
             transitions={transitions}
             onReorder={handleReorder}
-            compact={true}
+            onTransitionStyleChange={handleTransitionStyleChange}
+            targetDuration={previewTargetDuration}
+            compact={false}
           />
+        </div>
 
-          {/* Mix history */}
+        {/* Sidebar: Set generator */}
+        <div className="lg:sticky lg:top-16 lg:self-start space-y-4">
+          <SetGeneratorPanel
+            onGenerate={handleGenerate}
+            isLoading={generateMutation.isPending}
+          />
           <MixHistory playlistId={playlistId} />
         </div>
-      )}
+      </div>
 
     </div>
   );

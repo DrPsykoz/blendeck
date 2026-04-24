@@ -24,6 +24,8 @@ interface TrackTableProps {
   tracks: Track[];
   transitions?: TransitionScore[];
   onReorder: (tracks: Track[]) => void;
+  onTransitionStyleChange?: (fromTrackId: string, toTrackId: string, style: string) => void;
+  targetDuration?: number;
   currentSpotifyUri?: string | null;
   onPlaySpotify?: (uri: string) => void;
   compact?: boolean;
@@ -64,6 +66,8 @@ function SortableRow({
   onPlayTransition,
   isTransitionPlaying,
   isTransitionLoading,
+  transitionColSpan,
+  onTransitionStyleChange,
 }: {
   track: Track;
   index: number;
@@ -79,6 +83,8 @@ function SortableRow({
   onPlayTransition?: () => void;
   isTransitionPlaying?: boolean;
   isTransitionLoading?: boolean;
+  transitionColSpan: number;
+  onTransitionStyleChange?: (style: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition: dndTransition } =
     useSortable({ id: track.id });
@@ -92,37 +98,48 @@ function SortableRow({
 
   return (
     <>
-      {/* Transition connector between rows */}
-      {index > 0 && transition && !compact && (
-        <tr className="group/trans">
-          <td colSpan={10} className="py-0 px-0">
-            <TransitionBadge
-              transition={transition}
-              fromTrack={prevTrack}
-              toTrack={track}
-              onPlay={onPlayTransition}
-              isPlaying={isTransitionPlaying}
-              isLoading={isTransitionLoading}
-            />
+      {/* Zero-height transition row - badge overflows visually between tracks */}
+      {transition && (
+        <tr style={{ height: 0, lineHeight: 0 }}>
+          <td
+            colSpan={transitionColSpan}
+            style={{ height: 0, padding: 0, border: "none", overflow: "visible" }}
+          >
+            <div style={{ height: 0, overflow: "visible", position: "relative" }}>
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, transform: "translateY(-50%)", zIndex: 20 }}>
+                <TransitionBadge
+                  transition={transition}
+                  compact={compact}
+                  fromTrack={prevTrack}
+                  toTrack={track}
+                  onStyleChange={onTransitionStyleChange}
+                  onPlay={onPlayTransition}
+                  isPlaying={isTransitionPlaying}
+                  isLoading={isTransitionLoading}
+                />
+              </div>
+            </div>
           </td>
         </tr>
       )}
+
+      {/* Track row */}
       <tr
         ref={setNodeRef}
         style={style}
-        className={`group border-b border-deck-border/30 transition-colors ${
+        className={`group transition-colors ${
           isSpotifyPlaying ? "bg-amber/5" : isPlaying ? "bg-amber/[0.03]" : "hover:bg-deck-surface/50"
         }`}
       >
         {!compact && (
-          <td className="w-8 px-2 py-2">
+          <td className="w-8 px-2 py-3">
             <button {...attributes} {...listeners} className="cursor-grab text-sand-500 hover:text-sand-200">
               <GripVertical className="h-4 w-4" />
             </button>
           </td>
         )}
-        <td className="w-8 px-2 py-2 font-mono text-sm text-sand-400">{index + 1}</td>
-        <td className="px-2 py-2">
+        <td className="w-8 px-2 py-3 font-mono text-sm text-sand-400">{index + 1}</td>
+        <td className="px-2 py-3">
           <div className="flex items-center gap-3">
             {/* Album art with play overlay */}
             <button
@@ -186,10 +203,10 @@ function SortableRow({
             </div>
           </div>
         </td>
-        <td className="px-2 py-2 text-center font-mono text-sm tabular-nums text-sand-200">
+        <td className="px-2 py-3 text-center font-mono text-sm tabular-nums text-sand-200">
           {af ? Math.round(af.tempo) : "—"}
         </td>
-        <td className="px-2 py-2 text-center">
+        <td className="px-2 py-3 text-center">
           {track.camelot ? (
             <span
               className={`inline-block rounded-md border px-2 py-0.5 font-mono text-xs font-semibold ${getCamelotColor(track.camelot.letter)}`}
@@ -200,7 +217,7 @@ function SortableRow({
             <span className="text-xs text-sand-500">—</span>
           )}
         </td>
-        <td className="px-2 py-2">
+        <td className="px-2 py-3">
           {af ? (
             <div className="flex items-center gap-2">
               <div className="h-1.5 w-16 rounded-full bg-deck-surface">
@@ -218,21 +235,21 @@ function SortableRow({
           )}
         </td>
         {!compact && (
-        <td className="px-2 py-2 text-center font-mono text-xs tabular-nums text-sand-300">
+        <td className="px-2 py-3 text-center font-mono text-xs tabular-nums text-sand-300">
           {af ? (af.danceability * 100).toFixed(0) : "—"}
         </td>
         )}
         {!compact && (
-        <td className="px-2 py-2 text-center font-mono text-xs tabular-nums text-sand-400">
+        <td className="px-2 py-3 text-center font-mono text-xs tabular-nums text-sand-400">
           {track.release_year ?? "—"}
         </td>
         )}
         {!compact && (
-        <td className="px-2 py-2 text-right font-mono text-xs tabular-nums text-sand-400">
+        <td className="px-2 py-3 text-right font-mono text-xs tabular-nums text-sand-400">
           {formatDuration(track.duration_ms)}
         </td>
         )}
-        <td className="px-2 py-2 text-center">
+        <td className="px-2 py-3 text-center">
           {onPlaySpotify && (
             <button
               onClick={() => onPlaySpotify(track.uri)}
@@ -252,7 +269,7 @@ function SortableRow({
   );
 }
 
-export default function TrackTable({ tracks, transitions, onReorder, currentSpotifyUri, onPlaySpotify, compact }: TrackTableProps) {
+export default function TrackTable({ tracks, transitions, onReorder, onTransitionStyleChange, targetDuration = 0, currentSpotifyUri, onPlaySpotify, compact }: TrackTableProps) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
   );
@@ -264,7 +281,6 @@ export default function TrackTable({ tracks, transitions, onReorder, currentSpot
   const [playingTransitionKey, setPlayingTransitionKey] = useState<string | null>(null);
   const [loadingTransitionKey, setLoadingTransitionKey] = useState<string | null>(null);
   const transitionBlobRef = useRef<string | null>(null);
-
   // Sync localTracks when parent tracks change
   useEffect(() => {
     setLocalTracks(tracks);
@@ -315,7 +331,13 @@ export default function TrackTable({ tracks, transitions, onReorder, currentSpot
     });
   }, []);
 
-  const handlePlayTransition = useCallback(async (fromId: string, toId: string) => {
+  const handlePlayTransition = useCallback(async (
+    fromId: string,
+    toId: string,
+    style = "multiband",
+    duration = 8,
+    fromIsFirst = false,
+  ) => {
     const key = `${fromId}_${toId}`;
 
     // Toggle off if already playing this transition
@@ -348,6 +370,10 @@ export default function TrackTable({ tracks, transitions, onReorder, currentSpot
         fromId, toId,
         fromTrack.name, fromTrack.artists[0] || "",
         toTrack.name, toTrack.artists[0] || "",
+        style,
+        duration,
+        targetDuration,
+        fromIsFirst,
       );
       transitionBlobRef.current = blobUrl;
       setLoadingTransitionKey(null);
@@ -375,7 +401,7 @@ export default function TrackTable({ tracks, transitions, onReorder, currentSpot
       setLoadingTransitionKey(null);
       setPlayingTransitionKey(null);
     }
-  }, [playingTransitionKey, localTracks]);
+  }, [playingTransitionKey, localTracks, targetDuration]);
 
   const handleTogglePlay = useCallback(async (track: Track) => {
     // Stop any transition preview
@@ -438,6 +464,8 @@ export default function TrackTable({ tracks, transitions, onReorder, currentSpot
     }
   }
 
+  const transitionColSpan = compact ? (onPlaySpotify ? 6 : 5) : (onPlaySpotify ? 10 : 9);
+
   return (
     <div className="overflow-x-auto rounded-xl border border-deck-border bg-deck-card">
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -477,9 +505,21 @@ export default function TrackTable({ tracks, transitions, onReorder, currentSpot
                     isSpotifyPlaying={currentSpotifyUri === track.uri}
                     onPlaySpotify={onPlaySpotify}
                     compact={compact}
-                    onPlayTransition={trans ? () => handlePlayTransition(trans.from_track_id, trans.to_track_id) : undefined}
+                    onPlayTransition={trans ? () => handlePlayTransition(
+                      trans.from_track_id,
+                      trans.to_track_id,
+                      trans.style || "multiband",
+                      trans.duration || 8,
+                      i === 1,
+                    ) : undefined}
+                    onTransitionStyleChange={trans ? (style) => onTransitionStyleChange?.(
+                      trans.from_track_id,
+                      trans.to_track_id,
+                      style,
+                    ) : undefined}
                     isTransitionPlaying={transKey === playingTransitionKey}
                     isTransitionLoading={transKey === loadingTransitionKey}
+                    transitionColSpan={transitionColSpan}
                   />
                 );
               })}
