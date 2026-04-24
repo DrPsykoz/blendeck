@@ -673,11 +673,13 @@ def _analyze_vocal_presence(mp3_path: Path) -> list[float]:
     return per_second
 
 
-def _analyze_for_trim(mp3_path: Path) -> tuple[list[float], list[float]]:
-    """Single-load analysis: returns (energy_curve, vocal_score) together.
+def _analyze_for_trim(mp3_path: Path) -> tuple[list[float], list[float], list[float]]:
+    """Single-load analysis: returns (energy_curve, vocal_score, beat_times_s).
 
-    Loads audio once at low sample rate for both energy and vocal analysis,
-    cutting total analysis time roughly in half vs separate calls.
+    Loads audio once at low sample rate for energy, vocal, and beat analysis,
+    so segment selection can snap cut points to beat/bar boundaries.
+
+    beat_times_s: list of beat positions in seconds (from librosa.beat.beat_track).
     """
     import librosa
 
@@ -685,7 +687,7 @@ def _analyze_for_trim(mp3_path: Path) -> tuple[list[float], list[float]]:
         y, sr = librosa.load(str(mp3_path), sr=11025, mono=True)
     except Exception as e:
         logger.error(f"Trim: failed to load '{mp3_path.name}': {e}")
-        return [], []
+        return [], [], []
 
     # Energy: per-second RMS
     rms = librosa.feature.rms(y=y, frame_length=sr, hop_length=sr)[0]
@@ -707,7 +709,17 @@ def _analyze_for_trim(mp3_path: Path) -> tuple[list[float], list[float]]:
         chunk = vocal_ratio[i * fps : (i + 1) * fps]
         vocal_score.append(float(np.mean(chunk)))
 
-    return energy, vocal_score
+    # Beat tracking: detect bar boundaries (every 4 beats = 1 measure)
+    # Uses a smaller hop_length for beat accuracy while still being fast at 11025Hz
+    try:
+        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=256, trim=False)
+        beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=256)
+        beat_times_s = [float(t) for t in beat_times]
+    except Exception as e:
+        logger.warning(f"Trim: beat tracking failed for '{mp3_path.name}': {e}")
+        beat_times_s = []
+
+    return energy, vocal_score, beat_times_s
 
 
 def _analyze_transition_points(mp3_path: Path) -> dict:
@@ -764,6 +776,61 @@ def _analyze_transition_points(mp3_path: Path) -> dict:
         "bpm": 0,
         "energy_curve": energy.tolist(),
     }
+
+
+def _snap_to_bar(
+    t: float,
+    beat_times: list[float],
+    bars: int = 1,
+    tolerance_s: float = 2.5,
+    direction: str = "nearest",
+) -> float:
+    """Snap a time position to the nearest bar boundary (every `bars` beats).
+
+    A bar boundary is beat index 0, 4, 8, 12, … (multiples of 4 beats).
+    Only snaps when a bar boundary is within tolerance_s; otherwise returns t
+    unchanged so we don't make things worse.
+
+    direction: "nearest" | "before" | "after"
+      - "before": prefer bar boundary before t (good for exit points)
+      - "after" : prefer bar boundary after t  (good for entry points)
+    """
+    if not beat_times or len(beat_times) < 4:
+        return t
+
+    beats_per_bar = 4 * bars
+    # Bar boundaries = every `beats_per_bar` beats starting from the first beat
+    bar_times = [beat_times[i] for i in range(0, len(beat_times), beats_per_bar)]
+    if not bar_times:
+        return t
+
+    bar_arr = np.array(bar_times)
+
+    if direction == "before":
+        candidates = bar_arr[bar_arr <= t + tolerance_s]
+        if len(candidates) == 0:
+            return t
+        # Nearest candidate at or before t
+        diffs = t - candidates
+        diffs_positive = np.where(diffs >= 0, diffs, np.inf)
+        idx = int(np.argmin(diffs_positive))
+        snapped = float(candidates[idx])
+    elif direction == "after":
+        candidates = bar_arr[bar_arr >= t - tolerance_s]
+        if len(candidates) == 0:
+            return t
+        diffs = candidates - t
+        diffs_positive = np.where(diffs >= 0, diffs, np.inf)
+        idx = int(np.argmin(diffs_positive))
+        snapped = float(candidates[idx])
+    else:  # nearest
+        diffs = np.abs(bar_arr - t)
+        idx = int(np.argmin(diffs))
+        snapped = float(bar_arr[idx])
+
+    if abs(snapped - t) <= tolerance_s:
+        return snapped
+    return t
 
 
 def _find_best_segment(energy: list[float], target_s: int, total_s: float,
@@ -922,8 +989,8 @@ def _trim_track(
 
     logger.info(f"Trim: analyzing '{mp3_path.name}' ({total_s:.0f}s → target {target_s}s)")
 
-    # Single-load combined analysis (energy + vocal in one librosa.load)
-    energy, vocal_score = _analyze_for_trim(mp3_path)
+    # Single-load combined analysis (energy + vocal + beats in one librosa.load)
+    energy, vocal_score, beat_times = _analyze_for_trim(mp3_path)
     if preserve_start:
         start_s = 0.0
         end_s = min(float(target_s), total_s)
@@ -937,6 +1004,21 @@ def _trim_track(
             next_energy=next_track_energy,
             preserve_start=preserve_start,
         )
+        # Snap entry point to bar boundary (after), and exit to bar boundary (before)
+        # This ensures transitions always start and end on musically meaningful points.
+        if not preserve_start and beat_times:
+            start_s = _snap_to_bar(start_s, beat_times, bars=1, tolerance_s=2.5, direction="after")
+            # Re-snap exit to maintain target duration from the snapped start
+            raw_end = start_s + target_s
+            end_s = _snap_to_bar(raw_end, beat_times, bars=1, tolerance_s=2.5, direction="before")
+            # Safety: never make segment shorter than target_s - 4s
+            if end_s < start_s + max(target_s - 4, 10):
+                end_s = min(start_s + target_s, total_s)
+            end_s = min(end_s, total_s)
+            logger.info(
+                f"Trim: snapped segment {start_s:.1f}s–{end_s:.1f}s "
+                f"({end_s - start_s:.1f}s, {len(beat_times)} beats detected)"
+            )
 
     duration = end_s - start_s
     fade_s = 2  # 2s fade in/out at cut points
@@ -1323,8 +1405,9 @@ def _pick_auto_transition(info_a: dict, info_b: dict, default_dur: int) -> dict:
     if bpm_a > 0 and bpm_b > 0:
         ratio = max(bpm_a, bpm_b) / max(min(bpm_a, bpm_b), 1)
         if ratio < 1.05:
-            # BPMs are similar: longer smooth crossfade
-            return {"style": "beatmatch", "duration": min(default_dur + 2, 15)}
+            # BPMs are similar: beatmatch crossfade, duration = nearest 2-bar multiple
+            dur = _bpm_aware_crossfade_s(float(bpm_a), float(bpm_b), default_dur)
+            return {"style": "beatmatch", "duration": dur}
 
     # If track A has a clear outro (energy drops in last section), use fade
     energy_a = info_a.get("energy_curve", [])
@@ -1332,10 +1415,44 @@ def _pick_auto_transition(info_a: dict, info_b: dict, default_dur: int) -> dict:
         last_quarter = energy_a[-(len(energy_a) // 4):]
         first_half = energy_a[:len(energy_a) // 2]
         if np.mean(last_quarter) < np.mean(first_half) * 0.4:
-            return {"style": "fade", "duration": default_dur}
+            dur = _bpm_aware_crossfade_s(float(bpm_a), float(bpm_b), default_dur)
+            return {"style": "fade", "duration": dur}
 
     # Default: 3-band mix for smoother DJ-like transitions
-    return {"style": "multiband", "duration": default_dur}
+    dur = _bpm_aware_crossfade_s(float(bpm_a), float(bpm_b), default_dur)
+    return {"style": "multiband", "duration": dur}
+
+
+def _bpm_aware_crossfade_s(bpm_a: float, bpm_b: float, requested_s: int) -> int:
+    """Adjust crossfade duration to the nearest multiple of 2 bars at the avg BPM.
+
+    A 2-bar crossfade = 8 beats. At 128 BPM that's 3.75s. We find the multiple
+    of 2 bars closest to requested_s, clamped to [2, 15] seconds.
+    If BPM is unknown (0), returns requested_s unchanged.
+    """
+    avg_bpm = 0.0
+    if bpm_a > 0 and bpm_b > 0:
+        avg_bpm = (bpm_a + bpm_b) / 2.0
+    elif bpm_a > 0:
+        avg_bpm = bpm_a
+    elif bpm_b > 0:
+        avg_bpm = bpm_b
+
+    if avg_bpm < 60 or avg_bpm > 220:
+        return requested_s  # BPM out of sensible range
+
+    beat_s = 60.0 / avg_bpm        # duration of one beat in seconds
+    two_bars_s = beat_s * 8        # 8 beats = 2 bars
+
+    if two_bars_s <= 0:
+        return requested_s
+
+    # Find the multiple of 2 bars closest to requested_s
+    n = max(1, round(requested_s / two_bars_s))
+    snapped = two_bars_s * n
+    # Clamp to [2, 15] seconds
+    snapped = max(2.0, min(snapped, 15.0))
+    return int(round(snapped))
 
 
 async def generate_mix(
@@ -1508,7 +1625,15 @@ async def generate_mix(
                 logger.info(f"Auto transition {i}→{i+1}: {trans}")
             await on_progress("analyzing", n_trans, n_trans, "✓ Transitions analysées")
         else:
-            mix_transitions = [{"style": transition_style, "duration": crossfade_s}] * n_trans
+            # Apply BPM-aware crossfade duration per pair when BPM is known
+            mix_transitions = []
+            for i in range(n_trans):
+                bpm_a = tracks[i].get("bpm", 0) if i < len(tracks) else 0
+                bpm_b = tracks[i + 1].get("bpm", 0) if i + 1 < len(tracks) else 0
+                dur = _bpm_aware_crossfade_s(float(bpm_a), float(bpm_b), crossfade_s)
+                mix_transitions.append({"style": transition_style, "duration": dur})
+                if dur != crossfade_s:
+                    logger.info(f"BPM-aware crossfade {i}→{i+1}: {crossfade_s}s → {dur}s (bpm_a={bpm_a:.0f} bpm_b={bpm_b:.0f})")
 
         # Concatenate — with progress & ETA
         # Estimate total output duration
@@ -1695,7 +1820,7 @@ def _generate_transition_preview_sync(
         if target_duration_s > 0:
             try:
                 # Pre-analyze track B energy so track A can optimize its exit point
-                energy_b, _ = _analyze_for_trim(track_b)
+                energy_b, _, _ = _analyze_for_trim(track_b)
                 ok_a = _trim_track(track_a, target_duration_s, trimmed_a, from_id, from_is_first,
                                    next_track_energy=energy_b if energy_b else None)
                 ok_b = _trim_track(track_b, target_duration_s, trimmed_b, to_id, False)

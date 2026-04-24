@@ -155,7 +155,21 @@ async def export_mix(req: MixRequest, authorization: str = Header()):
     _extract_token(authorization)
     cleanup_old_mixes()
 
-    track_dicts = [{"id": t.id, "name": t.name, "artist": t.artist, "duration_ms": t.duration_ms} for t in req.tracks]
+    # Enrich track dicts with BPM from features cache for beat-aware crossfade duration
+    def _get_track_bpm(track_id: str) -> float:
+        features = features_cache.get_audio_features(track_id)
+        if features:
+            return float(features.get("tempo", 0) or features.get("bpm", 0) or 0)
+        return 0.0
+
+    track_dicts = [
+        {
+            "id": t.id, "name": t.name, "artist": t.artist,
+            "duration_ms": t.duration_ms,
+            "bpm": _get_track_bpm(t.id),
+        }
+        for t in req.tracks
+    ]
     crossfade_s = max(0, min(req.crossfade, 15))
     target_dur = max(0, min(req.target_duration, 600))  # cap at 10 min
     allowed_styles = {"crossfade", "fade", "cut", "echo", "beatmatch", "superpose", "multiband", "auto"}
