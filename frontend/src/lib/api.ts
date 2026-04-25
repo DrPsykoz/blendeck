@@ -303,7 +303,7 @@ export async function fetchAdminTrackAudioBlob(
 
 	const response = await fetch(
 		`${API_URL}/api/admin/cache/tracks/${encodeURIComponent(trackId)}/stream?${params.toString()}`,
-		{ headers: { Authorization: `Bearer ${token}` } },
+		{ headers: { Authorization: `Bearer ${token}` }, cache: "no-store" },
 	);
 	if (!response.ok) {
 		let detail = "Unknown error";
@@ -339,12 +339,14 @@ export async function searchAdminCandidates(
 	artist: string,
 	title: string,
 	durationMs = 0,
+	limit = 10,
 ): Promise<SearchCandidatesResult> {
 	const params = new URLSearchParams({
 		track_id: trackId,
 		artist,
 		title,
 		duration_ms: String(durationMs),
+		limit: String(limit),
 	});
 	return apiFetch<SearchCandidatesResult>(
 		`/api/admin/search-candidates?${params.toString()}`,

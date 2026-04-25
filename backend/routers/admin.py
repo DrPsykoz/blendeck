@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -424,7 +425,19 @@ async def admin_activate_track_variant(
 
     target_path = TRACKS_DIR / f"{track_id}.mp3"
     if source_path != target_path:
-        shutil.copy2(source_path, target_path)
+        previous_active_path: Path | None = target_path if target_path.exists() else None
+        archived_active_path: Path | None = None
+
+        if previous_active_path is not None:
+            archived_active_path = TRACKS_DIR / f"{track_id}__alt__{time.time_ns()}.mp3"
+            shutil.move(str(previous_active_path), str(archived_active_path))
+
+        try:
+            shutil.move(str(source_path), str(target_path))
+        except Exception:
+            if archived_active_path is not None and archived_active_path.exists() and not target_path.exists():
+                shutil.move(str(archived_active_path), str(target_path))
+            raise
 
     return {
         "track_id": track_id,
@@ -490,7 +503,16 @@ async def admin_stream_cached_track(
     if file_path is None:
         raise HTTPException(status_code=404, detail="Track cache file not found")
 
-    return FileResponse(file_path, media_type="audio/mpeg", filename=file_path.name)
+    return FileResponse(
+        file_path,
+        media_type="audio/mpeg",
+        filename=file_path.name,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 _TRACK_ID_RE = re.compile(r'^[a-zA-Z0-9]{1,32}$')
@@ -503,6 +525,7 @@ async def admin_search_candidates(
     artist: str = Query(...),
     title: str = Query(...),
     duration_ms: int = Query(0),
+    limit: int = Query(10, ge=10, le=50),
     authorization: str = Header(),
 ):
     """Search YouTube Music and return scored candidates for manual selection."""
@@ -520,7 +543,7 @@ async def admin_search_candidates(
     loop = asyncio.get_event_loop()
     with ThreadPoolExecutor(max_workers=1) as ex:
         candidates = await loop.run_in_executor(
-            ex, search_ytmusic_candidates, artist, title, duration_ms
+            ex, search_ytmusic_candidates, artist, title, duration_ms, limit
         )
 
     return {"track_id": track_id, "candidates": candidates}

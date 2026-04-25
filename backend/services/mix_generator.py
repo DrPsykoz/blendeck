@@ -1,9 +1,11 @@
 from __future__ import annotations
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import re
+import select
 import shutil
 import subprocess
 import tempfile
@@ -45,12 +47,45 @@ def _bitrate_env(name: str, default: str = "320k") -> str:
     return default
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    """Read a bool env var from 1/0, true/false, yes/no, on/off."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    logger.warning(f"Mix: invalid bool for {name}='{raw}', using {default}")
+    return default
+
+
 _MIX_DOWNLOAD_CONCURRENCY = _int_env("MIX_DOWNLOAD_CONCURRENCY", 3)
 _MIX_TRIM_CONCURRENCY = _int_env("MIX_TRIM_CONCURRENCY", 2)
 _MIX_ANALYSIS_CONCURRENCY = _int_env("MIX_ANALYSIS_CONCURRENCY", 2)
 _MIX_CONCAT_BATCH_SIZE = _int_env("MIX_CONCAT_BATCH_SIZE", 6, min_value=2, max_value=10)
 _MIX_CONCAT_SINGLE_PASS_LIMIT = _int_env("MIX_CONCAT_SINGLE_PASS_LIMIT", 18, min_value=2, max_value=120)
-_MIX_CONCAT_BATCH_PARALLELISM = _int_env("MIX_CONCAT_BATCH_PARALLELISM", 2, min_value=1, max_value=6)
+_MIX_CONCAT_BATCH_PARALLELISM = _int_env("MIX_CONCAT_BATCH_PARALLELISM", 5, min_value=1, max_value=6)
+_MIX_CONCAT_TRY_LARGE_SINGLE_PASS = _bool_env("MIX_CONCAT_TRY_LARGE_SINGLE_PASS", True)
+_MIX_CONCAT_LARGE_SINGLE_PASS_MAX_TRACKS = _int_env(
+    "MIX_CONCAT_LARGE_SINGLE_PASS_MAX_TRACKS",
+    400,
+    min_value=20,
+    max_value=1000,
+)
+_MIX_CONCAT_LARGE_BATCH_SIZE = _int_env(
+    "MIX_CONCAT_LARGE_BATCH_SIZE",
+    20,
+    min_value=6,
+    max_value=60,
+)
+_MIX_CONCAT_STARTUP_TIMEOUT_S = _int_env(
+    "MIX_CONCAT_STARTUP_TIMEOUT_S",
+    120,
+    min_value=20,
+    max_value=1800,
+)
 _cpu_count = max(os.cpu_count() or 4, 2)
 _default_ffmpeg_threads = max(1, int(round(_cpu_count * 0.7)))
 _MIX_FFMPEG_THREADS = _int_env("MIX_FFMPEG_THREADS", _default_ffmpeg_threads, min_value=1, max_value=32)
@@ -177,7 +212,12 @@ def _trim_cache_path(
 ) -> Path:
     safe_id = _safe_track_id(track_id)
     trim_mode = "intro" if preserve_start else "best"
-    suffix = f"_ne{hash(next_energy_fingerprint) & 0xFFFF:04x}" if next_energy_fingerprint else ""
+    # Use a deterministic digest (not Python's hash()) so cache keys remain
+    # stable across process restarts and containers.
+    suffix = ""
+    if next_energy_fingerprint:
+        digest = hashlib.sha1(next_energy_fingerprint.encode("utf-8")).hexdigest()[:8]
+        suffix = f"_ne{digest}"
     return TRIM_CACHE_DIR / f"{safe_id}_t{target_s}_s{source_size}_{trim_mode}{suffix}.mp3"
 
 
@@ -347,10 +387,10 @@ def _search_ytmusic(artist: str, title: str, duration_ms: int = 0) -> str | None
     return None
 
 
-def search_ytmusic_candidates(artist: str, title: str, duration_ms: int = 0) -> list[dict]:
+def search_ytmusic_candidates(artist: str, title: str, duration_ms: int = 0, limit: int = 10) -> list[dict]:
     """Return scored YouTube Music candidates for manual selection.
 
-    Returns up to 10 results (songs then videos), each as:
+    Returns up to `limit` results (songs then videos), each as:
     {
         "video_id": str,
         "title": str,
@@ -360,9 +400,13 @@ def search_ytmusic_candidates(artist: str, title: str, duration_ms: int = 0) -> 
         "thumbnail_url": str | None,
     }
     """
+    limit = max(10, min(limit, 50))
+    songs_limit = min(max(limit, 10), 30)
+    videos_limit = min(max(limit // 2, 8), 20)
+
     try:
-        songs = _ytmusic.search(f"{artist} {title}", filter="songs", limit=8) or []
-        videos = _ytmusic.search(f"{artist} {title}", filter="videos", limit=6) or []
+        songs = _ytmusic.search(f"{artist} {title}", filter="songs", limit=songs_limit) or []
+        videos = _ytmusic.search(f"{artist} {title}", filter="videos", limit=videos_limit) or []
         all_results = songs + videos
     except Exception as e:
         logger.warning(f"YTMusic candidate search failed for '{artist} - {title}': {e}")
@@ -394,7 +438,7 @@ def search_ytmusic_candidates(artist: str, title: str, duration_ms: int = 0) -> 
         })
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
-    return candidates[:10]
+    return candidates[:limit]
 
 
 async def redownload_track_by_video_id(track_id: str, video_id: str) -> bool:
@@ -1227,6 +1271,11 @@ def _concat_single_pass(
             filter_parts.append(_build_transition_filter(inp_left, inp_right, transitions[i - 1], out_label, i))
         filter_str = ";".join(filter_parts)
 
+    filter_script_path: Path | None = None
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".ffscript", delete=False) as ffscript:
+        ffscript.write(filter_str)
+        filter_script_path = Path(ffscript.name)
+
     cmd = [
         "ffmpeg", "-y",
         "-hide_banner",
@@ -1235,7 +1284,7 @@ def _concat_single_pass(
         "-threads", str(_MIX_FFMPEG_THREADS),
         "-filter_threads", str(_MIX_FFMPEG_FILTER_THREADS),
         *inputs,
-        "-filter_complex", filter_str,
+        "-filter_complex_script", str(filter_script_path),
         *codec_args,
         "-progress", "pipe:1",
         str(output),
@@ -1246,17 +1295,70 @@ def _concat_single_pass(
         import tempfile as _tf
         stderr_file = _tf.TemporaryFile(mode="w+", encoding="utf-8")
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=stderr_file, text=True)
+        emit_runtime_logs = progress_cb is not None
+        start_t = time.monotonic()
+        last_log_t = start_t
+        last_out_s = 0.0
+        last_speed = "n/a"
+        had_progress_output = False
+        first_progress_t: float | None = None
         while True:
-            line = proc.stdout.readline()
-            if not line and proc.poll() is not None:
+            if proc.stdout is None:
                 break
-            if line.startswith("out_time_us=") and progress_cb:
-                try:
-                    us = int(line.split("=", 1)[1].strip())
-                    if us > 0:
-                        progress_cb(us / 1_000_000)
-                except (ValueError, IndexError):
-                    pass
+
+            ready, _, _ = select.select([proc.stdout], [], [], 1.0)
+            if ready:
+                line = proc.stdout.readline()
+                if not line and proc.poll() is not None:
+                    break
+                if line:
+                    had_progress_output = True
+                if line.startswith("out_time_ms="):
+                    try:
+                        ms = int(line.split("=", 1)[1].strip())
+                        if ms > 0:
+                            last_out_s = ms / 1_000_000
+                            if first_progress_t is None:
+                                first_progress_t = time.monotonic()
+                    except (ValueError, IndexError):
+                        pass
+                if line.startswith("out_time_us="):
+                    try:
+                        us = int(line.split("=", 1)[1].strip())
+                        if us > 0:
+                            last_out_s = us / 1_000_000
+                            if first_progress_t is None:
+                                first_progress_t = time.monotonic()
+                            if progress_cb:
+                                progress_cb(us / 1_000_000)
+                    except (ValueError, IndexError):
+                        pass
+                if line.startswith("speed="):
+                    try:
+                        last_speed = line.split("=", 1)[1].strip() or "n/a"
+                    except (ValueError, IndexError):
+                        pass
+
+            now_t = time.monotonic()
+            if first_progress_t is None and now_t - start_t >= _MIX_CONCAT_STARTUP_TIMEOUT_S:
+                logger.warning(
+                    "Mix: ffmpeg concat startup timeout "
+                    f"({_MIX_CONCAT_STARTUP_TIMEOUT_S}s without encoded frames), aborting single-pass"
+                )
+                proc.kill()
+                proc.wait(timeout=5)
+                stderr_file.close()
+                output.unlink(missing_ok=True)
+                return False
+
+            if emit_runtime_logs and now_t - last_log_t >= 5:
+                if last_out_s > 0:
+                    logger.info(
+                        f"Mix: ffmpeg concat progress out={last_out_s:.1f}s speed={last_speed}"
+                    )
+                last_log_t = now_t
+            if proc.poll() is not None and not ready:
+                break
         proc.wait(timeout=1800)
         if proc.returncode != 0:
             stderr_file.seek(0)
@@ -1272,6 +1374,12 @@ def _concat_single_pass(
         stderr_file.close()
         logger.error("Mix: ffmpeg timed out")
         return False
+    except OSError as e:
+        logger.error(f"Mix: ffmpeg launch failed: {e}")
+        return False
+    finally:
+        if filter_script_path is not None:
+            filter_script_path.unlink(missing_ok=True)
 
 
 def _concat_with_transitions(
@@ -1336,8 +1444,14 @@ def _concat_with_transitions(
             total_work=1.0,
         )
 
+    # For large playlists, go straight to batched concat to avoid long
+    # single-pass graph preparation stalls.
+
     # --- Batched concat for large playlists ---
-    logger.info(f"Mix: batching level={level} {n} tracks into groups of {_CONCAT_BATCH_SIZE}")
+    concat_batch_size = _CONCAT_BATCH_SIZE
+    if n >= _MIX_CONCAT_LARGE_BATCH_SIZE * 2:
+        concat_batch_size = max(_CONCAT_BATCH_SIZE, _MIX_CONCAT_LARGE_BATCH_SIZE)
+    logger.info(f"Mix: batching level={level} {n} tracks into groups of {concat_batch_size}")
 
     batch_specs: list[tuple[int, int, list[Path], list[dict], Path, float]] = []
 
@@ -1346,7 +1460,7 @@ def _concat_with_transitions(
     temp_root = temp_dir or output.parent
     temp_root.mkdir(parents=True, exist_ok=True)
     while start < n:
-        end = min(start + _CONCAT_BATCH_SIZE, n)
+        end = min(start + concat_batch_size, n)
         batch_tracks = track_files[start:end]
         batch_trans = transitions[start:end - 1] if end - start > 1 else []
         batch_out = temp_root / f"_batch_l{level}_{batch_idx:03d}.flac"
@@ -1749,10 +1863,11 @@ async def generate_mix(
         )
         estimated_dur = max(total_track_dur - total_crossfade, 30)
 
+        will_try_large_single_pass = False
         concat_mode_detail = (
             f"Concaténation directe de {len(downloaded)} pistes (single-pass)..."
             if len(downloaded) <= _MIX_CONCAT_SINGLE_PASS_LIMIT
-            else f"Concaténation progressive de {len(downloaded)} pistes (lots de {_CONCAT_BATCH_SIZE})..."
+            else f"Concaténation progressive de {len(downloaded)} pistes (lots dynamiques)..."
         )
         await on_progress(
             "mixing",
@@ -1786,6 +1901,7 @@ async def generate_mix(
         )
 
         # Poll progress while ffmpeg runs
+        last_prep_emit_s = -1
         while not concat_future.done():
             await asyncio.sleep(1)
             cur = _encoded_s[0]
@@ -1800,6 +1916,11 @@ async def generate_mix(
                 else:
                     detail = f"Mixage {int(pct * 100)}%..."
                 await on_progress("mixing", int(bounded_cur), int(estimated_dur), detail)
+            else:
+                elapsed_t = int(time.monotonic() - _start_t[0])
+                if elapsed_t >= 5 and elapsed_t // 5 != last_prep_emit_s:
+                    last_prep_emit_s = elapsed_t // 5
+                    await on_progress("mixing", 0, int(estimated_dur), f"Initialisation du mixage ({elapsed_t}s)...")
 
         ok = await concat_future
 

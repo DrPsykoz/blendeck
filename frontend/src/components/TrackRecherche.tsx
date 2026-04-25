@@ -53,10 +53,11 @@ export default function TrackRecherche({
   onClose,
 }: TrackRechercheProps) {
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
+  const [resultLimit, setResultLimit] = useState(10);
 
   const searchQuery = useQuery({
-    queryKey: ["admin-candidates", trackId, artist, title],
-    queryFn: () => searchAdminCandidates(trackId, artist, title, durationMs),
+    queryKey: ["admin-candidates", trackId, artist, title, resultLimit],
+    queryFn: () => searchAdminCandidates(trackId, artist, title, durationMs, resultLimit),
     staleTime: 60_000,
   });
 
@@ -69,6 +70,7 @@ export default function TrackRecherche({
   });
 
   const candidates = searchQuery.data?.candidates ?? [];
+  const canLoadMore = !searchQuery.isLoading && candidates.length >= resultLimit && resultLimit < 50;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
@@ -179,6 +181,16 @@ export default function TrackRecherche({
                 </button>
               );
             })}
+
+      {canLoadMore && (
+        <button
+          onClick={() => setResultLimit((current) => Math.min(current + 10, 50))}
+          disabled={searchQuery.isFetching}
+          className="mt-3 w-full rounded-xl border border-deck-border bg-deck-surface/40 px-3 py-2 text-sm text-sand-300 hover:bg-deck-surface/70 disabled:opacity-50"
+        >
+          {searchQuery.isFetching ? "Chargement..." : "Voir plus de résultats"}
+        </button>
+      )}
           </div>
         </div>
 
