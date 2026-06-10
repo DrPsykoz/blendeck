@@ -1,7 +1,7 @@
 const CLIENT_ID = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID!;
 const REDIRECT_URI =
 	process.env.NEXT_PUBLIC_REDIRECT_URI || "http://localhost:3000/callback";
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 const SCOPES = [
 	"playlist-read-private",
