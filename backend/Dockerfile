@@ -3,6 +3,7 @@ FROM python:3.11-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1 \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -14,8 +15,7 @@ COPY . .
 
 RUN useradd -m -r appuser \
     && mkdir -p /app/cache/tracks /app/cache/mixes /app/cache/previews \
-    && chown -R appuser:appuser /app \
-    && apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
+    && chown -R appuser:appuser /app
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
