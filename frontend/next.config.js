@@ -3,6 +3,7 @@ const nextConfig = {
     swcMinify: true,
     productionBrowserSourceMaps: false,
     images: {
+        unoptimized: true,
         remotePatterns: [
             { protocol: "https", hostname: "i.scdn.co" },
             { protocol: "https", hostname: "mosaic.scdn.co" },
