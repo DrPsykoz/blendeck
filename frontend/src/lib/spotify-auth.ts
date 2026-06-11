@@ -1,3 +1,5 @@
+import { sha256 as jsSha256 } from "js-sha256";
+
 const CLIENT_ID = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID!;
 const REDIRECT_URI =
 	process.env.NEXT_PUBLIC_REDIRECT_URI || "http://localhost:3000/callback";
@@ -35,7 +37,6 @@ async function sha256(plain: string): Promise<ArrayBuffer> {
 	}
 
 	// Fallback: pure JS SHA-256 for HTTP (non-localhost)
-	const { sha256: jsSha256 } = await import("js-sha256");
 	const hash = jsSha256.create();
 	hash.update(data);
 	return hash.arrayBuffer();
