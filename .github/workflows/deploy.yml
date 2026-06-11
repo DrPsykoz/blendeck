@@ -163,7 +163,7 @@ jobs:
                   set -euo pipefail
                   APP_DIR="${DEPLOY_PATH:-/opt/blendeck}"
 
-                  ssh -p "${SSH_PORT:-22}" "${SSH_USER}@${SSH_HOST}" "cat > '${APP_DIR}/backend/.env' <<'ENVEOF'
+                  ssh -p "${SSH_PORT:-22}" "${SSH_USER}@${SSH_HOST}" "mkdir -p '${APP_DIR}/backend' && cat > '${APP_DIR}/backend/.env' <<'ENVEOF'
                   SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
                   SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
                   SPOTIFY_REDIRECT_URI=${SPOTIFY_REDIRECT_URI:-http://149.202.88.49:3000/callback}
