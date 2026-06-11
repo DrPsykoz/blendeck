@@ -111,6 +111,11 @@ jobs:
             GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
             OWNER_LC: ${{ needs.build_and_push.outputs.owner_lc }}
             IMAGE_TAG: ${{ needs.build_and_push.outputs.image_tag }}
+            SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+            SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+            SPOTIFY_REDIRECT_URI: ${{ secrets.SPOTIFY_REDIRECT_URI }}
+            FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
+            ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
 
         steps:
             - name: Checkout repository
@@ -126,6 +131,8 @@ jobs:
                   test -n "$SSH_PRIVATE_KEY"
                   test -n "$GHCR_USERNAME"
                   test -n "$GHCR_TOKEN"
+                  test -n "$SPOTIFY_CLIENT_ID"
+                  test -n "$SPOTIFY_CLIENT_SECRET"
 
             - name: Configure SSH
               run: |
@@ -150,6 +157,19 @@ jobs:
 
                   ssh -p "${SSH_PORT:-22}" "${SSH_USER}@${SSH_HOST}" "mkdir -p '${APP_DIR}'"
                   scp -P "${SSH_PORT:-22}" docker-compose.prod.yml "${SSH_USER}@${SSH_HOST}:${APP_DIR}/docker-compose.prod.yml"
+
+            - name: Create backend .env on server
+              run: |
+                  set -euo pipefail
+                  APP_DIR="${DEPLOY_PATH:-/opt/blendeck}"
+
+                  ssh -p "${SSH_PORT:-22}" "${SSH_USER}@${SSH_HOST}" "cat > '${APP_DIR}/backend/.env' <<'ENVEOF'
+                  SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+                  SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+                  SPOTIFY_REDIRECT_URI=${SPOTIFY_REDIRECT_URI:-http://149.202.88.49:3000/callback}
+                  FRONTEND_URL=${FRONTEND_URL:-http://149.202.88.49:3000}
+                  ADMIN_EMAIL=${ADMIN_EMAIL:-theo.frvl@gmail.com}
+                  ENVEOF"
 
             - name: Deploy images over SSH
               run: |
