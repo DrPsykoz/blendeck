@@ -93,8 +93,8 @@ jobs:
                       ghcr.io/${{ steps.vars.outputs.owner_lc }}/blendeck-frontend:latest
                   build-args: |
                       NEXT_PUBLIC_SPOTIFY_CLIENT_ID=${{ vars.NEXT_PUBLIC_SPOTIFY_CLIENT_ID || '94394d21dbd64970a0d3a12f8db6d0db' }}
-                      NEXT_PUBLIC_REDIRECT_URI=${{ vars.NEXT_PUBLIC_REDIRECT_URI || 'http://127.0.0.1:3000/callback' }}
-                      NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000' }}
+                      NEXT_PUBLIC_REDIRECT_URI=${{ vars.NEXT_PUBLIC_REDIRECT_URI || 'https://blendeck.fr/callback' }}
+                      NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL || '' }}
 
     deploy:
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
@@ -158,28 +158,40 @@ jobs:
                   ssh -p "${SSH_PORT:-22}" "${SSH_USER}@${SSH_HOST}" "mkdir -p '${APP_DIR}'"
                   scp -P "${SSH_PORT:-22}" docker-compose.prod.yml "${SSH_USER}@${SSH_HOST}:${APP_DIR}/docker-compose.prod.yml"
 
-            - name: Create backend .env on server
+            - name: Upload Apache virtual host config
+              run: |
+                  set -euo pipefail
+                  scp -P "${SSH_PORT:-22}" apache/blendeck.conf "${SSH_USER}@${SSH_HOST}:/tmp/blendeck.conf"
+
+            - name: Configure Apache and deploy
               run: |
                   set -euo pipefail
                   APP_DIR="${DEPLOY_PATH:-/opt/blendeck}"
 
-                  ssh -p "${SSH_PORT:-22}" "${SSH_USER}@${SSH_HOST}" "mkdir -p '${APP_DIR}/backend' && cat > '${APP_DIR}/backend/.env' <<'ENVEOF'
-                  SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
-                  SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
-                  SPOTIFY_REDIRECT_URI=${SPOTIFY_REDIRECT_URI:-http://149.202.88.49:3000/callback}
-                  FRONTEND_URL=${FRONTEND_URL:-http://149.202.88.49:3000}
-                  ADMIN_EMAIL=${ADMIN_EMAIL:-theo.frvl@gmail.com}
-                  ENVEOF"
-
-            - name: Deploy images over SSH
-              run: |
+                  ssh -p "${SSH_PORT:-22}" "${SSH_USER}@${SSH_HOST}" <<'DEPLOYEOF'
                   set -euo pipefail
                   APP_DIR="${DEPLOY_PATH:-/opt/blendeck}"
-
-                  ssh -p "${SSH_PORT:-22}" "${SSH_USER}@${SSH_HOST}" <<EOF
-                  set -euo pipefail
                   cd "$APP_DIR"
 
+                  # ── Apache virtual host ──
+                  if [ -d /etc/apache2/sites-available ]; then
+                      sudo cp /tmp/blendeck.conf /etc/apache2/sites-available/blendeck.conf
+                      sudo a2enmod proxy proxy_http rewrite 2>/dev/null || true
+                      sudo a2ensite blendeck 2>/dev/null || true
+                      sudo systemctl reload apache2 || sudo service apache2 reload
+                  fi
+
+                  # ── Backend .env from secrets ──
+                  mkdir -p '${APP_DIR}/backend'
+                  cat > '${APP_DIR}/backend/.env' <<ENVEOF
+                  SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+                  SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+                  SPOTIFY_REDIRECT_URI=${SPOTIFY_REDIRECT_URI:-https://blendeck.fr/callback}
+                  FRONTEND_URL=${FRONTEND_URL:-https://blendeck.fr}
+                  ADMIN_EMAIL=${ADMIN_EMAIL:-theo.frvl@gmail.com}
+                  ENVEOF
+
+                  # ── Docker deploy ──
                   export GHCR_USERNAME="$GHCR_USERNAME"
                   export GHCR_TOKEN="$GHCR_TOKEN"
                   export GHCR_OWNER="$OWNER_LC"
@@ -189,4 +201,4 @@ jobs:
                   docker compose -f docker-compose.prod.yml pull
                   docker compose -f docker-compose.prod.yml up -d --remove-orphans
                   docker image prune -f
-                  EOF
+                  DEPLOYEOF
