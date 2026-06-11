@@ -11,7 +11,7 @@ settings = get_settings()
 app = FastAPI(
     title="Blendeck",
     description="Transform your Spotify playlists into DJ-mixed sets",
-    version="1.0.18",
+    version="1.0.19",
 )
 
 app.add_middleware(
