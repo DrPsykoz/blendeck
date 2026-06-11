@@ -168,10 +168,9 @@ jobs:
                   set -euo pipefail
                   APP_DIR="${DEPLOY_PATH:-/opt/blendeck}"
 
-                  ssh -p "${SSH_PORT:-22}" "${SSH_USER}@${SSH_HOST}" <<'DEPLOYEOF'
+                  ssh -p "${SSH_PORT:-22}" "${SSH_USER}@${SSH_HOST}" <<DEPLOYEOF
                   set -euo pipefail
-                  APP_DIR="${DEPLOY_PATH:-/opt/blendeck}"
-                  cd "$APP_DIR"
+                  cd ${DEPLOY_PATH:-/opt/blendeck}
 
                   # ── Apache virtual host ──
                   if [ -d /etc/apache2/sites-available ]; then
@@ -182,8 +181,8 @@ jobs:
                   fi
 
                   # ── Backend .env from secrets ──
-                  mkdir -p '${APP_DIR}/backend'
-                  cat > '${APP_DIR}/backend/.env' <<ENVEOF
+                  mkdir -p ${DEPLOY_PATH:-/opt/blendeck}/backend
+                  cat > ${DEPLOY_PATH:-/opt/blendeck}/backend/.env <<ENVEOF
                   SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
                   SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
                   SPOTIFY_REDIRECT_URI=${SPOTIFY_REDIRECT_URI:-https://blendeck.fr/callback}
@@ -192,7 +191,7 @@ jobs:
                   ENVEOF
 
                   # ── Docker deploy ──
-                  export GHCR_USERNAME="$GHCR_USERNAME"
+                  export GHCR_USERNAME="${GHCR_USERNAME}"
                   export GHCR_TOKEN="$GHCR_TOKEN"
                   export GHCR_OWNER="$OWNER_LC"
                   export IMAGE_TAG="$IMAGE_TAG"
