@@ -28,7 +28,17 @@ function generateRandomString(length: number): string {
 async function sha256(plain: string): Promise<ArrayBuffer> {
 	const encoder = new TextEncoder();
 	const data = encoder.encode(plain);
-	return crypto.subtle.digest("SHA-256", data);
+
+	// Web Crypto API requires secure context (HTTPS or localhost)
+	if (crypto.subtle) {
+		return crypto.subtle.digest("SHA-256", data);
+	}
+
+	// Fallback: pure JS SHA-256 for HTTP (non-localhost)
+	const { sha256: jsSha256 } = await import("js-sha256");
+	const hash = jsSha256.create();
+	hash.update(data);
+	return hash.arrayBuffer();
 }
 
 function base64urlEncode(buffer: ArrayBuffer): string {
