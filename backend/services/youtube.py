@@ -13,6 +13,19 @@ _executor = ThreadPoolExecutor(max_workers=2)
 _COOKIES_PATH = os.environ.get("YT_COOKIES_PATH", "/app/cache/cookies.txt")
 
 
+def apply_cookies(ydl_opts: dict) -> dict:
+    """Attach the YouTube cookie file to yt-dlp options if it exists.
+
+    Centralizes cookie handling so every yt-dlp call — analysis snippets here and
+    full-track mix downloads in mix_generator — authenticates the same way and
+    bypasses bot-detection on datacenter IPs. Returns the same dict for chaining.
+    """
+    if os.path.isfile(_COOKIES_PATH):
+        ydl_opts["cookiefile"] = _COOKIES_PATH
+        logger.info("YouTube: using cookies from %s", _COOKIES_PATH)
+    return ydl_opts
+
+
 def _download_sync(artist: str, title: str, duration_s: int = 30) -> bytes | None:
     """Search YouTube and download a short audio snippet. Returns MP3 bytes or None."""
     import shutil
@@ -45,10 +58,7 @@ def _download_sync(artist: str, title: str, duration_s: int = 30) -> bytes | Non
         "retries": 2,
     }
 
-    # Use cookies if available (bypasses bot detection on datacenter IPs)
-    if os.path.isfile(_COOKIES_PATH):
-        ydl_opts["cookiefile"] = _COOKIES_PATH
-        logger.info("YouTube: using cookies from %s", _COOKIES_PATH)
+    apply_cookies(ydl_opts)
 
     try:
         try:

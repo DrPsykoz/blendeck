@@ -20,6 +20,8 @@ import numpy as np
 import yt_dlp
 from ytmusicapi import YTMusic
 
+from services import youtube
+
 logger = logging.getLogger(__name__)
 _executor = ThreadPoolExecutor(max_workers=6)
 _ytmusic = YTMusic()
@@ -486,6 +488,7 @@ def _download_by_video_id(video_id: str, out_path: Path) -> bool:
         "socket_timeout": 30,
         "retries": 3,
     }
+    youtube.apply_cookies(ydl_opts)
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -559,6 +562,7 @@ def _download_full_track(track_id: str, artist: str, title: str, out_path: Path,
             "socket_timeout": 30,
             "retries": 3,
         }
+        youtube.apply_cookies(ydl_opts)
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
