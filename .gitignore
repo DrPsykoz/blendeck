@@ -17,6 +17,10 @@ backend/cache/
 *.mp3
 *.wav
 
+# Secrets — YouTube cookies (contain a logged-in Google session, never commit)
+cookies.txt
+*cookies*.txt
+
 # IDE
 .vscode/
 .idea/

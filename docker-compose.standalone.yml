@@ -9,6 +9,9 @@ services:
       - ./backend/.env
     volumes:
       - audio-cache:/app/cache
+      # YouTube cookies (Netscape format) to bypass bot-detection on datacenter IPs.
+      # Create ./cookies.txt on the host BEFORE `up`, or Docker creates a directory here.
+      - ./cookies.txt:/app/cache/cookies.txt:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/api/health').raise_for_status()"]
       interval: 30s

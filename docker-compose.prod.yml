@@ -9,6 +9,10 @@ services:
       - ./backend/.env
     volumes:
       - audio-cache:/app/cache
+      # YouTube cookies (Netscape format) to bypass bot-detection on datacenter IPs.
+      # Create $DEPLOY_PATH/cookies.txt on the server BEFORE deploy, or Docker
+      # creates a directory at this path and yt-dlp will ignore it.
+      - ./cookies.txt:/app/cache/cookies.txt:ro
     healthcheck:
       test:
         [
