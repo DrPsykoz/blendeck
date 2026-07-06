@@ -141,6 +141,11 @@ FRONTEND_URL=http://localhost:3000
 # Pré-chargement en arrière-plan (optionnel)
 MIX_PREFETCH_CONCURRENCY=2        # Max concurrent downloads
 MIX_PREFETCH_MAX_TRACKS=80        # Max tracks to prefetch per playlist
+
+# Cache des pistes (optionnel)
+TRACK_CACHE_MAX_GB=20             # Budget disque du cache tracks/ (éviction LRU)
+TRACK_DURATION_TOLERANCE_PCT=8    # Tolérance durée téléchargée vs Spotify (%)
+TRACK_DOWNLOAD_FAIL_TTL_H=24      # Délai avant nouvel essai d'une piste introuvable
 ```
 
 Éditer `frontend/.env.local` :

@@ -20,47 +20,26 @@ import numpy as np
 import yt_dlp
 from ytmusicapi import YTMusic
 
-from services import youtube
+from core import paths
+from core.env import bitrate_env, bool_env, int_env
+from services import track_cache, youtube
 
 logger = logging.getLogger(__name__)
 _executor = ThreadPoolExecutor(max_workers=6)
-_ytmusic = YTMusic()
+_ytmusic_instance: YTMusic | None = None
 
 
-def _int_env(name: str, default: int, min_value: int = 1, max_value: int = 8) -> int:
-    """Read and clamp an integer env var, with safe fallback."""
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        logger.warning(f"Mix: invalid value for {name}='{raw}', using {default}")
-        return default
-    return max(min_value, min(max_value, value))
+def _get_ytmusic() -> YTMusic:
+    global _ytmusic_instance
+    if _ytmusic_instance is None:
+        _ytmusic_instance = YTMusic()
+    return _ytmusic_instance
 
 
-def _bitrate_env(name: str, default: str = "320k") -> str:
-    """Read a safe audio bitrate value like 192k/256k/320k."""
-    raw = (os.getenv(name) or default).strip().lower()
-    if re.fullmatch(r"[1-9][0-9]{1,3}k", raw):
-        return raw
-    logger.warning(f"Mix: invalid bitrate for {name}='{raw}', using {default}")
-    return default
-
-
-def _bool_env(name: str, default: bool) -> bool:
-    """Read a bool env var from 1/0, true/false, yes/no, on/off."""
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    logger.warning(f"Mix: invalid bool for {name}='{raw}', using {default}")
-    return default
+# Kept under their historical names; shared implementations live in core.env.
+_int_env = int_env
+_bitrate_env = bitrate_env
+_bool_env = bool_env
 
 
 _MIX_DOWNLOAD_CONCURRENCY = _int_env("MIX_DOWNLOAD_CONCURRENCY", 3)
@@ -105,19 +84,14 @@ _TRANSITION_TEMP_MAX_AGE_HOURS = _int_env("TRANSITION_TEMP_MAX_AGE_HOURS", 6, mi
 _TRIM_CACHE_MAX_GB = _int_env("TRIM_CACHE_MAX_GB", 2, min_value=1, max_value=200)
 _TRIM_CACHE_MAX_AGE_DAYS = _int_env("TRIM_CACHE_MAX_AGE_DAYS", 14, min_value=1, max_value=365)
 
-MIX_DIR = Path("/app/cache/mixes")
-MIX_DIR.mkdir(parents=True, exist_ok=True)
-
-TRACK_CACHE_DIR = Path("/app/cache/tracks")
-TRACK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+MIX_DIR = paths.MIXES_DIR
+TRACK_CACHE_DIR = paths.TRACKS_DIR
+TRIM_CACHE_DIR = paths.TRIMMED_DIR
 
 
 def get_cached_track_ids(track_ids: list[str]) -> set[str]:
     """Return the subset of track_ids whose full MP3 exists in cache."""
     return {tid for tid in track_ids if (TRACK_CACHE_DIR / f"{tid}.mp3").exists()}
-
-TRIM_CACHE_DIR = Path("/app/cache/trimmed")
-TRIM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Keep generated mixes for 1 hour max
 _mix_files: dict[str, Path] = {}
@@ -193,11 +167,8 @@ _load_history()
 
 
 def _get_cached_track(track_id: str) -> Path | None:
-    """Return path to cached track MP3, or None."""
-    cached = TRACK_CACHE_DIR / f"{track_id}.mp3"
-    if cached.exists() and cached.stat().st_size > 1000:
-        return cached
-    return None
+    """Return path to cached track MP3, or None. Refreshes LRU recency."""
+    return track_cache.get(track_id)
 
 
 def _safe_track_id(track_id: str) -> str:
@@ -347,9 +318,9 @@ def _score_ytmusic_result(result: dict, artist: str, title: str, duration_ms: in
 def _search_ytmusic(artist: str, title: str, duration_ms: int = 0) -> str | None:
     """Search YouTube Music for the best matching video ID."""
     try:
-        results = _ytmusic.search(f"{artist} {title}", filter="songs", limit=20)
+        results = _get_ytmusic().search(f"{artist} {title}", filter="songs", limit=20)
         if not results:
-            results = _ytmusic.search(f"{artist} {title}", filter="videos", limit=20)
+            results = _get_ytmusic().search(f"{artist} {title}", filter="videos", limit=20)
         if not results:
             return None
 
@@ -407,8 +378,8 @@ def search_ytmusic_candidates(artist: str, title: str, duration_ms: int = 0, lim
     videos_limit = min(max(limit // 2, 8), 20)
 
     try:
-        songs = _ytmusic.search(f"{artist} {title}", filter="songs", limit=songs_limit) or []
-        videos = _ytmusic.search(f"{artist} {title}", filter="videos", limit=videos_limit) or []
+        songs = _get_ytmusic().search(f"{artist} {title}", filter="songs", limit=songs_limit) or []
+        videos = _get_ytmusic().search(f"{artist} {title}", filter="videos", limit=videos_limit) or []
         all_results = songs + videos
     except Exception as e:
         logger.warning(f"YTMusic candidate search failed for '{artist} - {title}': {e}")
@@ -461,8 +432,9 @@ async def redownload_track_by_video_id(track_id: str, video_id: str) -> bool:
     if not ok or not tmp_path.exists():
         return False
 
-    TRACK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(tmp_path), str(cache_path))
+    track_cache.store_atomic(tmp_path, cache_path)
+    tmp_path.unlink(missing_ok=True)
+    track_cache.clear_failed(track_id)
     logger.info(f"redownload_track_by_video_id: saved {cache_path} ({cache_path.stat().st_size // 1024}KB)")
     return True
 
@@ -516,24 +488,58 @@ def _hardlink_or_copy(src: Path, dst: Path) -> None:
         shutil.copy(str(src), str(dst))
 
 
+def _publish_downloaded_track(track_id: str, src: Path, out_path: Path) -> None:
+    """Store src in the track cache atomically and expose it at out_path."""
+    track_cache.store_atomic(src, track_cache.cache_path(track_id))
+    if src != out_path:
+        shutil.move(str(src), str(out_path))
+    track_cache.clear_failed(track_id)
+
+
 def _download_full_track(track_id: str, artist: str, title: str, out_path: Path, duration_ms: int = 0) -> bool:
-    """Download full track: YT Music search → fallback generic YouTube search."""
-    # Check cache first
-    cached = _get_cached_track(track_id)
-    if cached:
-        _hardlink_or_copy(cached, out_path)
-        logger.info(f"Mix: cache hit for '{artist} - {title}' ({cached.stat().st_size // 1024}KB)")
-        return True
+    """Download full track: YT Music search → fallback generic YouTube search.
+
+    Single-flight per track: concurrent prefetch/mix requests for the same
+    track serialize here, and the second caller hits the cache.
+    """
+    with track_cache.track_lock(track_id):
+        # Check cache first (again, in case another thread just downloaded it)
+        cached = _get_cached_track(track_id)
+        if cached:
+            _hardlink_or_copy(cached, out_path)
+            logger.info(f"Mix: cache hit for '{artist} - {title}' ({cached.stat().st_size // 1024}KB)")
+            return True
+
+        # Negative cache: this track failed all strategies recently, don't
+        # hammer YouTube again on every mix/prefetch.
+        if track_cache.is_marked_failed(track_id):
+            logger.info(f"Mix: skipping '{artist} - {title}' (recent download failure)")
+            return False
+
+        return _download_full_track_locked(track_id, artist, title, out_path, duration_ms)
+
+
+def _download_full_track_locked(track_id: str, artist: str, title: str, out_path: Path, duration_ms: int = 0) -> bool:
+    # A candidate whose duration doesn't match Spotify's metadata is kept as a
+    # last resort but never poisons the cache silently: we prefer any
+    # duration-validated result from a later strategy.
+    fallback_path: Path | None = None
+
+    def _cleanup_fallback() -> None:
+        if fallback_path is not None:
+            fallback_path.unlink(missing_ok=True)
 
     # Strategy 1: YouTube Music precise search
     video_id = _search_ytmusic(artist, title, duration_ms)
     if video_id:
-        if _download_by_video_id(video_id, out_path):
-            # Save to cache
-            cache_path = TRACK_CACHE_DIR / f"{track_id}.mp3"
-            shutil.copy(str(out_path), str(cache_path))
-            logger.info(f"Mix: YTMusic download OK for '{artist} - {title}' ({out_path.stat().st_size // 1024}KB)")
-            return True
+        tmp_path = out_path.with_name(out_path.name + ".ytm.tmp")
+        if _download_by_video_id(video_id, tmp_path):
+            if track_cache.duration_matches(tmp_path, duration_ms):
+                _publish_downloaded_track(track_id, tmp_path, out_path)
+                logger.info(f"Mix: YTMusic download OK for '{artist} - {title}' ({out_path.stat().st_size // 1024}KB)")
+                return True
+            logger.warning(f"Mix: YTMusic result duration mismatch for '{artist} - {title}', trying fallbacks")
+            fallback_path = tmp_path
 
     # Strategy 2: Fallback to generic YouTube search
     queries = [
@@ -542,7 +548,7 @@ def _download_full_track(track_id: str, artist: str, title: str, out_path: Path,
         f"{artist} {title} audio -cover -karaoke -live -tribute -remix -reprise",
     ]
 
-    for attempt, query in enumerate(queries):
+    for query in queries:
         tmp_dir = tempfile.mkdtemp()
 
         ydl_opts = {
@@ -580,13 +586,33 @@ def _download_full_track(track_id: str, artist: str, title: str, out_path: Path,
             shutil.rmtree(tmp_dir, ignore_errors=True)
             continue
 
-        cache_path = TRACK_CACHE_DIR / f"{track_id}.mp3"
-        shutil.copy(str(mp3_files[0]), str(cache_path))
-        shutil.move(str(mp3_files[0]), str(out_path))
+        if not track_cache.duration_matches(mp3_files[0], duration_ms):
+            if fallback_path is None:
+                fallback_path = out_path.with_name(out_path.name + ".fb.tmp")
+                shutil.move(str(mp3_files[0]), str(fallback_path))
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            logger.warning(f"Mix: fallback result duration mismatch for '{query}'")
+            continue
+
+        candidate = Path(tmp_dir) / "candidate.mp3"
+        shutil.move(str(mp3_files[0]), str(candidate))
+        _publish_downloaded_track(track_id, candidate, out_path)
         shutil.rmtree(tmp_dir, ignore_errors=True)
+        _cleanup_fallback()
         logger.info(f"Mix: YT fallback OK for '{artist} - {title}' ({out_path.stat().st_size // 1024}KB)")
         return True
 
+    # Last resort: accept the duration-mismatched candidate rather than nothing,
+    # so the mix isn't missing the track entirely. The admin panel can fix it.
+    if fallback_path is not None and fallback_path.exists():
+        _publish_downloaded_track(track_id, fallback_path, out_path)
+        logger.warning(
+            f"Mix: using duration-mismatched result for '{artist} - {title}' "
+            f"({out_path.stat().st_size // 1024}KB) — check in admin panel"
+        )
+        return True
+
+    track_cache.mark_failed(track_id)
     logger.error(f"Mix: FAILED all attempts for '{artist} - {title}'")
     return False
 
@@ -607,6 +633,28 @@ def _prefetch_one_track(track_id: str, artist: str, title: str, duration_ms: int
         return ok, False
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+# Prefetch throttling shared across playlists: one global semaphore (opening
+# several playlists no longer multiplies concurrent downloads), and a pause
+# gate so an in-progress mix always gets the download bandwidth first.
+_prefetch_semaphore = asyncio.Semaphore(_MIX_PREFETCH_CONCURRENCY)
+_mix_idle = asyncio.Event()
+_mix_idle.set()
+_active_mix_count = 0
+
+
+def _mark_mix_started() -> None:
+    global _active_mix_count
+    _active_mix_count += 1
+    _mix_idle.clear()
+
+
+def _mark_mix_finished() -> None:
+    global _active_mix_count
+    _active_mix_count = max(0, _active_mix_count - 1)
+    if _active_mix_count == 0:
+        _mix_idle.set()
 
 
 async def prefetch_tracks_audio_cache(tracks: list[dict], playlist_id: str = "") -> dict:
@@ -630,7 +678,6 @@ async def prefetch_tracks_audio_cache(tracks: list[dict], playlist_id: str = "")
     picked = to_download + [t for t in tracks if str(t.get("id") or "").strip() in already_cached]
 
     loop = asyncio.get_event_loop()
-    sem = asyncio.Semaphore(_MIX_PREFETCH_CONCURRENCY)
 
     downloaded = 0
     cached = 0
@@ -647,7 +694,9 @@ async def prefetch_tracks_audio_cache(tracks: list[dict], playlist_id: str = "")
         title = str(t.get("name") or "").strip()
         duration_ms = int(t.get("duration_ms") or 0)
 
-        async with sem:
+        async with _prefetch_semaphore:
+            # Yield to any mix currently generating: its downloads come first.
+            await _mix_idle.wait()
             ok, was_cached = await loop.run_in_executor(
                 _executor,
                 _prefetch_one_track,
@@ -665,6 +714,9 @@ async def prefetch_tracks_audio_cache(tracks: list[dict], playlist_id: str = "")
             failed += 1
 
     await asyncio.gather(*[_run_one(t) for t in picked])
+
+    if downloaded:
+        await loop.run_in_executor(_executor, track_cache.evict_lru)
 
     logger.info(
         "Prefetch: playlist=%s queued=%d downloaded=%d cached=%d failed=%d",
@@ -1706,6 +1758,7 @@ async def generate_mix(
     downloaded_track_ids: list[str] = []
     skipped: list[str] = []
 
+    _mark_mix_started()  # pauses background prefetch for the duration
     try:
         # Download tracks with limited parallelism
         _dl_semaphore = asyncio.Semaphore(_MIX_DOWNLOAD_CONCURRENCY)
@@ -1755,6 +1808,11 @@ async def generate_mix(
 
         await on_progress("downloaded", total, total,
                           f"✓ {n_downloaded} téléchargée(s), {n_cached} en cache, {len(skipped)} échouée(s)")
+
+        if n_downloaded:
+            # Work-dir files are hardlinks to the cache, so evicting a cache
+            # entry never pulls data out from under the mix in progress.
+            await asyncio.get_event_loop().run_in_executor(_executor, track_cache.evict_lru)
 
         # Trim tracks by small batches to avoid CPU spikes on large playlists
         if target_duration_s > 0:
@@ -1942,13 +2000,14 @@ async def generate_mix(
         return mix_id
 
     finally:
+        _mark_mix_finished()
         # Keep only the final mix file; all per-job intermediates live in work_dir.
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
 # ── Transition preview ──────────────────────────────────────────────
 
-TRANSITION_DIR = Path("/app/cache/transitions")
+TRANSITION_DIR = paths.TRANSITIONS_DIR
 TRANSITION_DIR.mkdir(parents=True, exist_ok=True)
 
 _MAX_TRANSITION_CACHE = 50
