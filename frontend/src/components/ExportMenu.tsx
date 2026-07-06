@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Track, TransitionScore, exportNewPlaylist, exportReorder, exportFile, generateMix, downloadMix, MixProgress, TransitionConfig } from "@/lib/api";
+import { Track, TransitionScore, exportNewPlaylist, exportReorder, exportFile, generateMix, downloadMix, fetchActiveMixJob, resumeMixJob, MixProgress, TransitionConfig } from "@/lib/api";
 import { Download, ListPlus, ArrowUpDown, FileDown, Loader2, Check, Music } from "lucide-react";
 
 interface ExportMenuProps {
@@ -120,6 +120,60 @@ export default function ExportMenu({
     setLoading(null);
   };
 
+  const makeMixCallbacks = (autoDownload: boolean) => ({
+    onStart: () => {},
+    onProgress: (data: MixProgress) => {
+      setMixProgress(data);
+      // Track phase changes
+      if (["downloading", "cached", "downloaded", "skipped", "trimming", "analyzing", "mixing"].includes(data.status)) {
+        setMixPhase(data.status);
+      }
+      // Log notable events
+      if (["cached", "downloading", "skipped", "downloaded", "trimming", "analyzing", "mixing"].includes(data.status)) {
+        setMixLog((prev) => [...prev.slice(-30), { status: data.status, detail: data.detail, time: Date.now() }]);
+      }
+    },
+    onComplete: (id: string) => {
+      setMixId(id);
+      setLoading(null);
+      setSuccess("mix");
+      setMixPhase("done");
+      setTimeout(() => setSuccess(null), 5000);
+      if (autoDownload) {
+        downloadMix(id).catch((e) => console.error("Download failed:", e));
+      }
+      // Reload history
+      if (typeof (window as any).__reloadMixHistory === "function") (window as any).__reloadMixHistory();
+    },
+    onError: (msg: string) => {
+      alert(`Erreur mix: ${msg}`);
+      setLoading(null);
+      setMixProgress(null);
+      setMixPhase("");
+    },
+  });
+
+  // Re-attach to a mix still generating server-side (e.g. after a page reload)
+  useEffect(() => {
+    let cancelled = false;
+    fetchActiveMixJob(playlistId)
+      .then(({ job_id }) => {
+        if (!job_id || cancelled) return;
+        setLoading("mix");
+        setMixProgress(null);
+        setMixId(null);
+        setMixStartTime(Date.now());
+        setMixPhase("downloading");
+        setMixLog([]);
+        cancelMix.current = resumeMixJob(job_id, makeMixCallbacks(false));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playlistId]);
+
   const handleMix = () => {
     setLoading("mix");
     setMixProgress(null);
@@ -141,37 +195,10 @@ export default function ExportMenu({
       duration: transition.duration || crossfade,
     }));
 
-    cancelMix.current = generateMix(mixTracks, crossfade, {
-      onStart: () => {},
-      onProgress: (data) => {
-        setMixProgress(data);
-        // Track phase changes
-        if (["downloading", "cached", "downloaded", "skipped", "trimming", "analyzing", "mixing"].includes(data.status)) {
-          setMixPhase(data.status);
-        }
-        // Log notable events
-        if (["cached", "downloading", "skipped", "downloaded", "trimming", "analyzing", "mixing"].includes(data.status)) {
-          setMixLog((prev) => [...prev.slice(-30), { status: data.status, detail: data.detail, time: Date.now() }]);
-        }
-      },
-      onComplete: (id) => {
-        setMixId(id);
-        setLoading(null);
-        setSuccess("mix");
-        setMixPhase("done");
-        setTimeout(() => setSuccess(null), 5000);
-        // Auto-download
-        downloadMix(id).catch((e) => console.error("Download failed:", e));
-        // Reload history
-        if (typeof (window as any).__reloadMixHistory === "function") (window as any).__reloadMixHistory();
-      },
-      onError: (msg) => {
-        alert(`Erreur mix: ${msg}`);
-        setLoading(null);
-        setMixProgress(null);
-        setMixPhase("");
-      },
-    }, targetDuration, transitionStyle, mixTransitions, playlistId);
+    cancelMix.current = generateMix(
+      mixTracks, crossfade, makeMixCallbacks(true),
+      targetDuration, transitionStyle, mixTransitions, playlistId,
+    );
   };
 
   const handleDownloadMix = () => {

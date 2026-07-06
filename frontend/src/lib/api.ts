@@ -668,64 +668,108 @@ export function generateMix(
 			return;
 		}
 
-		const reader = response.body.getReader();
-		const decoder = new TextDecoder();
-		let buffer = "";
-		let eventType = "";
-		let eventData = "";
+		await consumeMixEventStream(response, callbacks, () => aborted);
+	})();
 
-		const dispatch = () => {
-			if (!eventType || !eventData) return;
-			try {
-				const data = JSON.parse(eventData);
-				switch (eventType) {
-					case "start":
-						callbacks.onStart(data);
-						break;
-					case "progress":
-						callbacks.onProgress(data);
-						break;
-					case "complete":
-						callbacks.onComplete(data.mix_id);
-						break;
-					case "error":
-						callbacks.onError(data.message);
-						break;
-				}
-			} catch {
-				// skip parse errors
+	return () => {
+		aborted = true;
+	};
+}
+
+/** Parse a mix SSE stream (start/progress/complete/error) into callbacks. */
+async function consumeMixEventStream(
+	response: Response,
+	callbacks: MixCallbacks,
+	isAborted: () => boolean,
+): Promise<void> {
+	if (!response.body) return;
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	let eventType = "";
+	let eventData = "";
+
+	const dispatch = () => {
+		if (!eventType || !eventData) return;
+		try {
+			const data = JSON.parse(eventData);
+			switch (eventType) {
+				case "start":
+					callbacks.onStart(data);
+					break;
+				case "progress":
+					callbacks.onProgress(data);
+					break;
+				case "complete":
+					callbacks.onComplete(data.mix_id);
+					break;
+				case "error":
+					callbacks.onError(data.message);
+					break;
 			}
-			eventType = "";
-			eventData = "";
-		};
+		} catch {
+			// skip parse errors
+		}
+		eventType = "";
+		eventData = "";
+	};
 
-		const processLines = (lines: string[]) => {
-			for (const line of lines) {
-				if (line.startsWith("event: ")) {
-					eventType = line.slice(7).trim();
-				} else if (line.startsWith("data: ")) {
-					eventData = line.slice(6);
-				} else if (line === "") {
-					dispatch();
-				}
+	const processLines = (lines: string[]) => {
+		for (const line of lines) {
+			if (line.startsWith("event: ")) {
+				eventType = line.slice(7).trim();
+			} else if (line.startsWith("data: ")) {
+				eventData = line.slice(6);
+			} else if (line === "") {
+				dispatch();
 			}
-		};
+		}
+	};
 
-		while (!aborted) {
-			const { value, done } = await reader.read();
-			if (done) break;
+	while (!isAborted()) {
+		const { value, done } = await reader.read();
+		if (done) break;
 
-			buffer += decoder.decode(value, { stream: true });
-			const lines = buffer.split("\n");
-			buffer = lines.pop() || "";
-			processLines(lines);
+		buffer += decoder.decode(value, { stream: true });
+		const lines = buffer.split("\n");
+		buffer = lines.pop() || "";
+		processLines(lines);
+	}
+
+	if (buffer.trim()) {
+		const lines = buffer.split("\n");
+		processLines(lines);
+	}
+	dispatch();
+}
+
+/** Return the running mix job for a playlist, if any (survives page reloads). */
+export async function fetchActiveMixJob(
+	playlistId: string,
+): Promise<{ job_id: string | null; status?: string }> {
+	return apiFetch(
+		`/api/export/mix-jobs/active?playlist_id=${encodeURIComponent(playlistId)}`,
+	);
+}
+
+/** Re-attach to a running mix job: replays past events then follows live. */
+export function resumeMixJob(jobId: string, callbacks: MixCallbacks): () => void {
+	let aborted = false;
+
+	(async () => {
+		const token = await getValidToken();
+		if (!token || aborted) return;
+
+		const response = await fetch(`${API_URL}/api/export/mix-jobs/${jobId}/events`, {
+			headers: { Authorization: `Bearer ${token}` },
+		});
+
+		if (!response.ok || !response.body) {
+			callbacks.onError(`HTTP ${response.status}`);
+			return;
 		}
 
-		if (buffer.trim()) {
-			const lines = buffer.split("\n");
-			processLines(lines);
-		}
-		dispatch();
+		await consumeMixEventStream(response, callbacks, () => aborted);
 	})();
 
 	return () => {

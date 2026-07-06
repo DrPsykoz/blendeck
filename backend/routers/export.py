@@ -17,15 +17,16 @@ from models.track import (
     TransitionOverride,
 )
 from services.spotify import create_playlist, add_tracks_to_playlist, replace_playlist_tracks
-from services import features_cache
+from services import features_cache, mix_jobs
 from services.mix_generator import generate_mix, get_mix_path, cleanup_old_mixes, get_mix_history, generate_transition_preview
 from services.transition import score_transition
 import asyncio
 
 router = APIRouter(prefix="/api/export", tags=["export"])
 
-# Limit concurrent mix generations to prevent resource exhaustion
-_mix_semaphore = asyncio.Semaphore(2)
+# Limit concurrent transition-preview generations (ffmpeg heavy); full mixes
+# are throttled by the mix_jobs registry instead.
+_preview_semaphore = asyncio.Semaphore(2)
 
 
 def _extract_token(authorization: str | None) -> str:
@@ -181,49 +182,30 @@ async def export_mix(req: MixRequest, authorization: str = Header()):
             for t in req.transitions
         ]
 
-    async def event_stream():
-        progress_events: list[str] = []
+    # The generation runs as a background job: closing the SSE connection
+    # (tab closed, network drop) does not abort it, and the client can
+    # re-attach via /mix-jobs.
+    def _runner(on_progress):
+        return generate_mix(
+            track_dicts, crossfade_s, on_progress, target_dur,
+            transition_style=trans_style, transitions_override=trans_overrides,
+            playlist_id=req.playlist_id,
+        )
 
-        try:
-            await asyncio.wait_for(_mix_semaphore.acquire(), timeout=0.1)
-        except asyncio.TimeoutError:
+    try:
+        job = mix_jobs.start_job(req.playlist_id, _runner, len(track_dicts), crossfade_s)
+    except mix_jobs.TooManyJobs:
+        async def busy_stream():
             yield _mix_sse("error", {"message": "Trop de mix en cours, réessayez dans quelques minutes"})
-            return
+        return StreamingResponse(busy_stream(), media_type="text/event-stream")
 
-        try:
-            async def on_progress(status: str, current: int, total: int, detail: str):
-                progress_events.append(_mix_sse("progress", {
-                    "status": status,
-                    "current": current,
-                    "total": total,
-                    "detail": detail,
-                }))
+    return _job_event_response(job)
 
-            task = asyncio.create_task(generate_mix(
-                track_dicts, crossfade_s, on_progress, target_dur,
-                transition_style=trans_style, transitions_override=trans_overrides,
-                playlist_id=req.playlist_id,
-            ))
 
-            yield _mix_sse("start", {"total": len(track_dicts), "crossfade": crossfade_s})
-
-            while not task.done():
-                await asyncio.sleep(0.5)
-                while progress_events:
-                    yield progress_events.pop(0)
-
-            # Drain remaining
-            while progress_events:
-                yield progress_events.pop(0)
-
-            mix_id = await task
-
-            if mix_id:
-                yield _mix_sse("complete", {"mix_id": mix_id})
-            else:
-                yield _mix_sse("error", {"message": "Échec de la génération du mix"})
-        finally:
-            _mix_semaphore.release()
+def _job_event_response(job, from_index: int = 0) -> StreamingResponse:
+    async def event_stream():
+        async for event_type, data in job.follow(from_index):
+            yield _mix_sse(event_type, data)
 
     return StreamingResponse(
         event_stream(),
@@ -234,6 +216,31 @@ async def export_mix(req: MixRequest, authorization: str = Header()):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/mix-jobs/active")
+async def active_mix_job(playlist_id: str = Query(""), authorization: str = Header()):
+    """Return the currently running mix job for a playlist, if any."""
+    _extract_token(authorization)
+    job = mix_jobs.get_active_job(playlist_id)
+    if not job:
+        return {"job_id": None}
+    return {"job_id": job.id, "status": job.status, "events": len(job.events)}
+
+
+_JOB_ID_RE = re.compile(r'^[a-f0-9]{12}$')
+
+
+@router.get("/mix-jobs/{job_id}/events")
+async def mix_job_events(job_id: str, authorization: str = Header()):
+    """Re-attach to a mix job: replays all past events then follows live ones."""
+    _extract_token(authorization)
+    if not _JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=400, detail="Invalid job ID")
+    job = mix_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    return _job_event_response(job)
 
 
 _MIX_ID_RE = re.compile(r'^[a-zA-Z0-9]{1,20}$')
@@ -371,7 +378,7 @@ async def transition_preview(
     target_duration = max(0, min(target_duration, 600))
 
     try:
-        await asyncio.wait_for(_mix_semaphore.acquire(), timeout=0.1)
+        await asyncio.wait_for(_preview_semaphore.acquire(), timeout=0.1)
     except asyncio.TimeoutError:
         raise HTTPException(status_code=503, detail="Trop de générations en cours, réessayez")
 
@@ -383,7 +390,7 @@ async def transition_preview(
             style, duration, target_duration, from_is_first,
         )
     finally:
-        _mix_semaphore.release()
+        _preview_semaphore.release()
 
     if not path:
         raise HTTPException(status_code=500, detail="Échec de la génération de la preview")
