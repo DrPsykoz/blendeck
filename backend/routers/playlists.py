@@ -4,15 +4,17 @@ import json
 import os
 import httpx
 import logging
-from pathlib import Path
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from core import paths
+from core.session import SESSION_COOKIE, verify_session_token
 from services.spotify import (
     get_user_playlists,
     get_playlist_tracks,
     get_playlist_tracks_basic,
     analyze_tracks_with_progress,
+    get_current_user_profile,
 )
 from services import deezer, features_cache, youtube
 from services.mix_generator import prefetch_tracks_audio_cache, get_cached_track_ids
@@ -28,10 +30,21 @@ _prefetch_tasks: dict[str, asyncio.Task] = {}
 
 
 def _start_prefetch_for_playlist(playlist_id: str, tracks: list[Track]) -> None:
-    """Start full-track cache prefetch in background, deduplicated per playlist."""
+    """Start full-track cache prefetch in background, deduplicated per playlist.
+
+    Only one playlist prefetches at a time: opening a new playlist cancels the
+    previous one's queue (downloads already in a worker thread finish and land
+    in the cache; only the not-yet-started remainder is dropped).
+    """
     running = _prefetch_tasks.get(playlist_id)
     if running and not running.done():
         return
+
+    for other_id, task in list(_prefetch_tasks.items()):
+        if other_id != playlist_id and not task.done():
+            task.cancel()
+            logger.info("Prefetch: cancelled queue for playlist %s (switched to %s)", other_id, playlist_id)
+        _prefetch_tasks.pop(other_id, None)
 
     payload = [
         {
@@ -46,6 +59,8 @@ def _start_prefetch_for_playlist(playlist_id: str, tracks: list[Track]) -> None:
     async def _run() -> None:
         try:
             await prefetch_tracks_audio_cache(payload, playlist_id=playlist_id)
+        except asyncio.CancelledError:
+            logger.info("Prefetch: playlist %s cancelled", playlist_id)
         except Exception:
             logger.exception("Background prefetch failed for playlist %s", playlist_id)
         finally:
@@ -72,6 +87,24 @@ def _extract_token(authorization: str | None) -> str:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid token")
     return authorization.removeprefix("Bearer ").strip()
+
+
+async def _require_session_or_token(request: Request, authorization: str | None) -> None:
+    """Auth guard for endpoints reachable from <audio src> (no headers).
+
+    Accepts either the signed session cookie set at login/refresh, or a Bearer
+    token verified against Spotify (cached 30 min in the spotify service).
+    """
+    if verify_session_token(request.cookies.get(SESSION_COOKIE)):
+        return
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.removeprefix("Bearer ").strip()
+        try:
+            await get_current_user_profile(token)
+            return
+        except Exception:
+            pass
+    raise HTTPException(status_code=401, detail="Not authenticated")
 
 
 @router.get("", response_model=list[PlaylistSummary])
@@ -248,8 +281,15 @@ def _track_dict(t: Track, cached_ids: set[str] | None = None) -> dict:
 
 
 @router.get("/preview/{track_id}")
-async def get_preview_url(track_id: str, name: str = "", artist: str = ""):
+async def get_preview_url(
+    request: Request,
+    track_id: str,
+    name: str = "",
+    artist: str = "",
+    authorization: str | None = Header(default=None),
+):
     """Fetch preview URL on-demand for a single track via Deezer, with YouTube fallback."""
+    await _require_session_or_token(request, authorization)
     _validate_track_id(track_id)
 
     # Resolve track metadata from cache if not provided
@@ -291,19 +331,28 @@ async def get_preview_url(track_id: str, name: str = "", artist: str = ""):
     return {"preview_url": None}
 
 
-PREVIEW_DIR = Path(os.getenv("CACHE_DIR", "/app/cache")) / "previews"
+PREVIEW_DIR = paths.PREVIEWS_DIR
 
 
 def _save_local_preview(track_id: str, audio_bytes: bytes) -> None:
-    """Save audio bytes as a local preview file."""
+    """Save audio bytes as a local preview file (atomic publish)."""
     PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
     path = PREVIEW_DIR / f"{track_id}.mp3"
-    path.write_bytes(audio_bytes)
+    tmp = path.with_name(path.name + ".part")
+    tmp.write_bytes(audio_bytes)
+    os.replace(tmp, path)
 
 
 @router.get("/preview-stream/{track_id}")
-async def stream_preview(track_id: str, name: str = "", artist: str = ""):
+async def stream_preview(
+    request: Request,
+    track_id: str,
+    name: str = "",
+    artist: str = "",
+    authorization: str | None = Header(default=None),
+):
     """Proxy-stream a preview. Re-fetches from Deezer/YouTube if expired."""
+    await _require_session_or_token(request, authorization)
     _validate_track_id(track_id)
 
     # Resolve track metadata from cache if not provided

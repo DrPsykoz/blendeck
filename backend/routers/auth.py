@@ -5,6 +5,7 @@ from fastapi import APIRouter, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from core.config import get_settings
+from core.session import SESSION_COOKIE, SESSION_MAX_AGE_S, make_session_token
 from services.spotify import get_current_user_profile
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -60,6 +61,7 @@ async def exchange_token(req: TokenExchangeRequest, response: Response):
 
     opts = _cookie_opts()
     response.set_cookie("spotify_refresh_token", data["refresh_token"], max_age=30 * 24 * 3600, **opts)
+    response.set_cookie(SESSION_COOKIE, make_session_token(), max_age=SESSION_MAX_AGE_S, **opts)
 
     return {
         "access_token": data["access_token"],
@@ -94,6 +96,7 @@ async def refresh_token(request: Request, response: Response):
     new_refresh = data.get("refresh_token", refresh)
     opts = _cookie_opts()
     response.set_cookie("spotify_refresh_token", new_refresh, max_age=30 * 24 * 3600, **opts)
+    response.set_cookie(SESSION_COOKIE, make_session_token(), max_age=SESSION_MAX_AGE_S, **opts)
 
     return {
         "access_token": data["access_token"],
@@ -105,6 +108,7 @@ async def refresh_token(request: Request, response: Response):
 async def logout(response: Response):
     """Clear refresh_token cookie."""
     response.delete_cookie("spotify_refresh_token", path="/")
+    response.delete_cookie(SESSION_COOKIE, path="/")
     return {"status": "ok"}
 
 

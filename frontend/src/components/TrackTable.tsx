@@ -304,7 +304,11 @@ export default function TrackTable({ tracks, transitions, onReorder, onTransitio
       audioRef.current.pause();
     }
 
-    const audio = new Audio(url);
+    const audio = new Audio();
+    // Preview streaming is authenticated via the session cookie; make sure
+    // the browser sends it on cross-origin dev setups (localhost:3000 → :8000).
+    audio.crossOrigin = "use-credentials";
+    audio.src = url;
     audio.volume = 0.5;
     audioRef.current = audio;
     setPlayingTrackId(trackId);
