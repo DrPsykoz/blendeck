@@ -2,13 +2,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-from pathlib import Path
 
+from core import paths
 from models.track import AudioFeatures
 
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = Path(os.getenv("CACHE_DIR", "/app/cache"))
+CACHE_DIR = paths.CACHE_ROOT
 CACHE_FILE = CACHE_DIR / "audio_features.json"
 PREVIEW_FILE = CACHE_DIR / "preview_urls.json"
 
@@ -53,6 +53,13 @@ def _load_from_disk() -> None:
         logger.warning(f"Failed to load track meta cache: {e}")
 
 
+def _atomic_write_json(path, payload) -> None:
+    tmp = path.with_suffix(path.suffix + ".part")
+    with open(tmp, "w") as f:
+        json.dump(payload, f)
+    os.replace(tmp, path)
+
+
 def _save_to_disk() -> None:
     _ensure_dir()
     try:
@@ -73,19 +80,15 @@ def _save_to_disk() -> None:
                 "duration_ms": af.duration_ms,
                 "time_signature": af.time_signature,
             }
-        with open(CACHE_FILE, "w") as f:
-            json.dump(data, f)
+        _atomic_write_json(CACHE_FILE, data)
     except Exception as e:
         logger.error(f"Failed to save features cache: {e}")
     try:
-        with open(PREVIEW_FILE, "w") as f:
-            json.dump(_preview_cache, f)
+        _atomic_write_json(PREVIEW_FILE, _preview_cache)
     except Exception as e:
         logger.error(f"Failed to save preview cache: {e}")
     try:
-        meta_file = CACHE_DIR / "track_meta.json"
-        with open(meta_file, "w") as f:
-            json.dump(_track_meta, f)
+        _atomic_write_json(CACHE_DIR / "track_meta.json", _track_meta)
     except Exception as e:
         logger.error(f"Failed to save track meta cache: {e}")
 

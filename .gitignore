@@ -31,3 +31,9 @@ Thumbs.db
 
 # Docker volumes
 audio-cache/
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Claude Code local settings (permissions locales, pas les skills)
+.claude/settings.local.json

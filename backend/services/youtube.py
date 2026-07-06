@@ -6,11 +6,13 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from core import paths
+
 logger = logging.getLogger(__name__)
 _executor = ThreadPoolExecutor(max_workers=2)
 
 # YouTube cookies file path (Netscape format, export with browser extension)
-_COOKIES_PATH = os.environ.get("YT_COOKIES_PATH", "/app/cache/cookies.txt")
+_COOKIES_PATH = os.environ.get("YT_COOKIES_PATH", str(paths.DEFAULT_COOKIES_PATH))
 
 
 def apply_cookies(ydl_opts: dict) -> dict:

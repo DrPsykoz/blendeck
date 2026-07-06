@@ -10,18 +10,19 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from core import paths
 from core.config import get_settings
 from services.spotify import get_current_user_profile
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 settings = get_settings()
 
-CACHE_ROOT = Path("/app/cache")
-TRACKS_DIR = CACHE_ROOT / "tracks"
-PREVIEWS_DIR = CACHE_ROOT / "previews"
-MIXES_DIR = CACHE_ROOT / "mixes"
-TRANSITIONS_DIR = CACHE_ROOT / "transitions"
-TRIMMED_DIR = CACHE_ROOT / "trimmed"
+CACHE_ROOT = paths.CACHE_ROOT
+TRACKS_DIR = paths.TRACKS_DIR
+PREVIEWS_DIR = paths.PREVIEWS_DIR
+MIXES_DIR = paths.MIXES_DIR
+TRANSITIONS_DIR = paths.TRANSITIONS_DIR
+TRIMMED_DIR = paths.TRIMMED_DIR
 
 ROOT_METADATA_FILES = [
     CACHE_ROOT / "audio_features.json",
@@ -579,7 +580,7 @@ async def admin_redownload_track(body: RedownloadRequest, authorization: str = H
         raise HTTPException(status_code=502, detail="Download failed — check logs")
 
     # Check the resulting file size
-    cache_path = Path("/app/cache/tracks") / f"{body.track_id}.mp3"
+    cache_path = TRACKS_DIR / f"{body.track_id}.mp3"
     size_mb = round(cache_path.stat().st_size / (1024 * 1024), 2) if cache_path.exists() else 0
 
     return {

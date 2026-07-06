@@ -9,7 +9,9 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
     admin_email: str = "theo.frvl@gmail.com"
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    # extra="ignore": the .env file also carries MIX_* tuning vars consumed
+    # directly via os.getenv; without this, bare-metal startup crashes on them.
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 @lru_cache
